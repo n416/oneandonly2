@@ -1,0 +1,3 @@
+[submodule "llm-api"]
+	path = llm-api
+	url = https://github.com/n416/llm-api.git
