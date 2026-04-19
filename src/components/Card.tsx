@@ -57,7 +57,12 @@ export default function Card({
     }
   };
 
-  const getRarityVal = (r: string = '★1') => parseInt(r.replace('★', ''), 10) || 1;
+  const getRarityVal = (r: string = '★1') => {
+    const starMatch = r.match(/★/g);
+    if (starMatch && starMatch.length > 1) return starMatch.length;
+    const num = parseInt(r.replace(/[^0-9]/g, ''), 10);
+    return isNaN(num) ? 1 : num;
+  };
   const rarityVal = getRarityVal(card.rarity);
   
   const bgStyle = (card.backgroundcss || '').replace(/background[^:]*:/i, '').trim();

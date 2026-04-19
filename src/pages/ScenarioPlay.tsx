@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Send, Trash2, Edit2, Check, X, Briefcase } from 'lucide-react';
+import { ArrowLeft, Send, Trash2, Edit2, Check, X, Briefcase, Lightbulb } from 'lucide-react';
 import pako from 'pako';
 import { 
   getScenarioById, getSceneEntriesByScenarioId, addSceneEntry, updateScenario, updateSceneEntry, deleteSceneEntry,
@@ -52,6 +52,10 @@ export default function ScenarioPlay() {
   const [editingEntryId, setEditingEntryId] = useState<number | null>(null);
   const [editTempText, setEditTempText] = useState('');
   const [editingType, setEditingType] = useState<'action' | 'content' | null>(null);
+
+  const [suggestedChoices, setSuggestedChoices] = useState<string[]>([]);
+  const [isGeneratingChoices, setIsGeneratingChoices] = useState(false);
+  const [pendingPlayerAction, setPendingPlayerAction] = useState<string | null>(null);
 
   // アイテム関連
   const [acquiredItems, setAcquiredItems] = useState<any[]>([]);
@@ -242,6 +246,7 @@ export default function ScenarioPlay() {
     if (!isOpening) {
       setPlayerInput('');
       setSelectedItem(null);
+      setPendingPlayerAction(actionTextJa);
     }
 
     try {
@@ -272,11 +277,16 @@ export default function ScenarioPlay() {
 
       // 要約の生成を非同期で実行
       handleSceneSummaries([...sceneHistory, newEntry]);
+      
+      // 次のシーンが生成されたら以前の選択肢はクリアする
+      setSuggestedChoices([]);
+      setPendingPlayerAction(null);
 
     } catch (e: any) {
       console.error(e);
       toast(`シーン生成エラー: ${e.message}`, 'error');
       setPlayerInput(actionTextJa); // エラー時は入力を戻す
+      setPendingPlayerAction(null);
     }
   };
 
@@ -584,6 +594,85 @@ ${lastScene.content}`;
     }
   };
 
+  const handleSuggestActions = async () => {
+    if (sceneHistory.length === 0 || isGeneratingChoices) return;
+    setIsGeneratingChoices(true);
+    setSuggestedChoices([]);
+    try {
+      const lastScene = sceneHistory[sceneHistory.length - 1];
+      const wd = scenario.wizardData || {};
+      let conditionTextJa = '(目標情報なし)';
+      if (wd.sections) {
+        const sorted = [...wd.sections].sort((a: any, b: any) => (a.number || 0) - (b.number || 0));
+        const firstUncleared = sorted.find((s: any) => !s.cleared);
+        if (firstUncleared) {
+          conditionTextJa = firstUncleared.condition || decompressCondition(firstUncleared.conditionZipped) || '?';
+        } else if (sorted.length > 0) {
+          conditionTextJa = '(全目標達成済み)';
+        }
+      }
+
+      let itemsText = 'なし';
+      if (acquiredItems && acquiredItems.length > 0) {
+        itemsText = acquiredItems.map((i: any) => i.name).join('、');
+      }
+
+      const prompt = `あなたはTRPGのGMアシスタントです。以下の状況に基づき、プレイヤーが次に取りうる**多様な**行動の選択肢を**4つ**提案し、その結果を必ず指定されたJSON形式で出力してください。
+
+状況:
+---
+現在のシーン:
+${lastScene.content}
+---
+現在の目標（セクションクリア条件）:
+${conditionTextJa}
+---
+プレイヤーの現在の持ち物:
+${itemsText}
+---
+
+出力指示:
+- 提案する行動選択肢は4つ生成してください。各20文字程度。
+- 各選択肢は具体的で、プレイヤーが実際に行動できる内容にしてください。
+- 多様性を意識し、探索、対話、戦闘準備、回避、あるいは少し意外な行動など、異なる方向性の選択肢を含めてください。
+- もし「持ち物」がある場合、そのアイテムを活用した選択肢を少なくとも1つ含めてください。
+- **必ず以下のJSON形式で、選択肢テキストの配列のみを出力してください。JSON以外の前置き、後書き、説明などは一切含めないでください。**
+
+出力形式 (JSON):
+{
+  "options": [
+    "選択肢のテキスト1",
+    "選択肢のテキスト2",
+    "選択肢のテキスト3",
+    "選択肢のテキスト4"
+  ]
+}`;
+
+      const response = await generateResponse(prompt, []);
+      const cleanJsonString = response.replace(/^```json\s*|```$/g, '').trim();
+      const match = cleanJsonString.match(/\{[\s\S]*\}/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (parsed.options && Array.isArray(parsed.options)) {
+          // Fisher-Yates Shuffle
+          const shuffled = [...parsed.options];
+          for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+          }
+          setSuggestedChoices(shuffled);
+        }
+      } else {
+        toast('選択肢の解析に失敗しました。', 'error');
+      }
+    } catch (e: any) {
+      console.error(e);
+      toast('選択肢の生成に失敗しました: ' + e.message, 'error');
+    } finally {
+      setIsGeneratingChoices(false);
+    }
+  };
+
   if (!scenario) return <div style={{ padding: '24px' }}>読込中...</div>;
 
   return (
@@ -727,6 +816,19 @@ ${lastScene.content}`;
           </div>
         ))}
 
+        {pendingPlayerAction && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', position: 'relative' }}>
+            <div style={{ alignSelf: 'flex-end', background: 'rgba(59, 130, 246, 0.2)', border: '1px solid rgba(59, 130, 246, 0.3)', padding: '12px 16px', borderRadius: '16px 16px 0 16px', maxWidth: '80%', position: 'relative' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <div style={{ fontSize: '0.8rem', color: '#60a5fa' }}>あなた (行動)</div>
+              </div>
+              <div style={{ whiteSpace: 'pre-wrap', outline: 'none' }}>
+                {pendingPlayerAction}
+              </div>
+            </div>
+          </div>
+        )}
+
         {isGenerating && (
           <div className="glass-panel animate-pulse" style={{ padding: '16px', borderRadius: '16px 16px 16px 0', alignSelf: 'flex-start', maxWidth: '80%' }}>
             <div style={{ fontSize: '0.8rem', color: '#a78bfa', marginBottom: '8px' }}>ゲームマスター (GM)</div>
@@ -792,9 +894,44 @@ ${lastScene.content}`;
 
       {/* 入力エリア */}
       <div className="glass-panel" style={{ padding: '16px', marginTop: 'auto', borderRadius: '16px 16px 0 0', display: 'flex', flexDirection: 'column', gap: '12px', zIndex: 10 }}>
-        <label style={{ fontSize: '0.9rem', color: 'rgba(255,255,255,0.8)' }}>
-          プレイヤーの行動 {selectedItem && <span style={{ color: '#4ade80' }}>（アイテム「{selectedItem.name}」を使用）</span>}
-        </label>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <label style={{ fontSize: '0.9rem', color: 'rgba(255,255,255,0.8)' }}>
+            プレイヤーの行動 {selectedItem && <span style={{ color: '#4ade80' }}>（アイテム「{selectedItem.name}」を使用）</span>}
+          </label>
+          <button 
+            className="btn btn-glass" 
+            style={{ fontSize: '0.8rem', padding: '4px 12px', borderColor: 'rgba(255,255,255,0.3)' }}
+            onClick={handleSuggestActions}
+            disabled={isGeneratingChoices || isGenerating || sceneHistory.length === 0}
+            title="AIに次の行動の選択肢を4つ提案してもらいます"
+          >
+            <Lightbulb size={14} style={{ marginRight: '4px' }}/>
+            {isGeneratingChoices ? '考え中...' : '行動の候補を考える'}
+          </button>
+        </div>
+
+        {/* 選択肢チップの表示 */}
+        {isGeneratingChoices && (
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <div className="chip animate-pulse" style={{ background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.5)', border: '1px solid transparent' }}>選択肢を生成中...</div>
+            <div className="chip animate-pulse" style={{ background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.5)', border: '1px solid transparent' }}>...</div>
+          </div>
+        )}
+        {!isGeneratingChoices && suggestedChoices.length > 0 && (
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', animation: 'fadeIn 0.3s ease' }}>
+            {suggestedChoices.map((choice, idx) => (
+              <button 
+                key={idx} 
+                className="chip" 
+                style={{ cursor: 'pointer', background: 'rgba(59, 130, 246, 0.2)', border: '1px solid rgba(59, 130, 246, 0.4)', transition: 'all 0.2s', textAlign: 'left' }}
+                onClick={() => setPlayerInput(choice)}
+              >
+                {choice}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
           <textarea
             className="btn-glass"

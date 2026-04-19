@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# --- Custom Ignore Rules ---
+.env
+models/
+dist_package/
+src-tauri/bin/
+__pycache__/
+*.pyc

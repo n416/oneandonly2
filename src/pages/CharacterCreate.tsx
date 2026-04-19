@@ -141,12 +141,23 @@ JSON配列出力:`;
         const cards = Array.isArray(parsed) ? parsed : [parsed];
         
         const newCards: CharacterCard[] = cards.map((item: any, idx: number) => {
-          const rarityNum = parseInt((item.rarity || '★1').replace(/[^0-9]/g, ''), 10) || 1;
+          const rawRarity = item.rarity || '★1';
+          let rarityNum = 1;
+          const starMatch = rawRarity.match(/★/g);
+          if (starMatch && starMatch.length > 1) {
+            rarityNum = starMatch.length;
+          } else {
+            rarityNum = parseInt(rawRarity.replace(/[^0-9]/g, ''), 10);
+            if (isNaN(rarityNum)) rarityNum = 1;
+          }
+          rarityNum = Math.max(0, Math.min(5, rarityNum));
+          const normalizedRarity = `★${rarityNum}`;
+
           return {
             id: `card_${Date.now()}_${idx}`,
             type: item.type || '不明',
             name: item.name || '名称未設定',
-            rarity: item.rarity || '★1',
+            rarity: normalizedRarity,
             state: item.state || '',
             special: item.special || '',
             caption: item.caption || '',

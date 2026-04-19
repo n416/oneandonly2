@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "package": "powershell -ExecutionPolicy Bypass -File ./scripts/package_dist.ps1",
+    "api:dev": "cd llm-api && python main.py"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
