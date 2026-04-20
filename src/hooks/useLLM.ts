@@ -1,11 +1,13 @@
 import { useState } from 'react';
 
-export type Provider = 'gemini' | 'local';
+export type Provider = 'gemini' | 'local' | 'ollama';
 
 export interface LLMConfig {
   provider: Provider;
   geminiApiKey?: string;
-  localEndpoint?: string; // Default to http://127.0.0.1:8000/api/chat-stream
+  localEndpoint?: string; // Default to http://127.0.0.1:8000/api/chat-stream (local) or http://127.0.0.1:11434/api/chat (ollama)
+  ollamaModel?: string;   // Ollama用モデル名
+  localModelPath?: string; // Local(llm-api)用モデルパス
 }
 
 export interface ChatMessage {
@@ -83,6 +85,57 @@ export function useLLM() {
             const chunk = decoder.decode(value, { stream: true });
             fullText += chunk;
             if (onChunk) onChunk(chunk);
+          }
+        }
+
+      } else if (config.provider === 'ollama') {
+        const endpoint = config.localEndpoint || 'http://127.0.0.1:11434/api/chat';
+        const model = config.ollamaModel || 'llama3';
+
+        const messagesPayload = [];
+        if (systemPrompt) {
+          messagesPayload.push({ role: 'system', content: systemPrompt });
+        }
+        history.forEach(h => {
+          messagesPayload.push({
+            role: h.role === 'user' ? 'user' : 'assistant',
+            content: h.parts[0].text
+          });
+        });
+
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            model: model,
+            messages: messagesPayload,
+            stream: true 
+          })
+        });
+
+        if (!res.ok) throw new Error(`Ollama API error: ${res.statusText}`);
+        
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value, { stream: true });
+            
+            const lines = chunk.split('\n').filter(l => l.trim() !== '');
+            for (const line of lines) {
+              try {
+                const parsed = JSON.parse(line);
+                if (parsed.message?.content) {
+                  fullText += parsed.message.content;
+                  if (onChunk) onChunk(parsed.message.content);
+                }
+              } catch (e) {
+                console.warn('Ollama chunk parse error', e);
+              }
+            }
           }
         }
 

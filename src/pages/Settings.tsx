@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { LLMConfig } from '../hooks/useLLM';
+import { LLMConfig, Provider } from '../hooks/useLLM';
 import { exportAllData, importAllData, clearAllData } from '../lib/indexedDB';
 import { useUI } from '../contexts/UIContext';
-import { Download, Upload } from 'lucide-react';
+import { Download, Upload, FolderOpen, File, RefreshCw } from 'lucide-react';
+import DirectoryViewer from '../components/DirectoryViewer';
 
 export default function Settings() {
   const [config, setConfig] = useState<LLMConfig>({
@@ -12,6 +13,16 @@ export default function Settings() {
   });
   const [saveMessage, setSaveMessage] = useState('');
   const [bgmEnabled, setBgmEnabled] = useState(() => localStorage.getItem('bgmStopped') !== 'true');
+  
+  // Local LLM API Status
+  const [localApiStatus, setLocalApiStatus] = useState<'offline' | 'unloaded' | 'loading' | 'ready' | 'error'>('offline');
+  const [loadedModelPath, setLoadedModelPath] = useState('');
+  const [loadErrorMsg, setLoadErrorMsg] = useState('');
+  const [serverModels, setServerModels] = useState<{name: string, path: string, type: string}[]>([]);
+  const [ollamaModels, setOllamaModels] = useState<{name: string}[]>([]);
+  
+  const [showDirViewer, setShowDirViewer] = useState(false);
+  const [dirViewerMode, setDirViewerMode] = useState<'gguf'|'folder'>('gguf');
   
   const { toast, confirm } = useUI();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -26,6 +37,98 @@ export default function Settings() {
       console.error(e);
     }
   }, []);
+
+  // Status polling effect
+  useEffect(() => {
+    if (config.provider !== 'local') return;
+    
+    let isSubscribed = true;
+    const checkStatus = async () => {
+      try {
+        const baseUrl = config.localEndpoint?.replace('/api/chat-stream', '') || 'http://127.0.0.1:8000';
+        const res = await fetch(`${baseUrl}/api/status`, { signal: AbortSignal.timeout(2000) });
+        if (res.ok) {
+          const data = await res.json();
+          if (isSubscribed) {
+            setLocalApiStatus(data.status || 'unloaded');
+            setLoadedModelPath(data.model_path || '');
+            setLoadErrorMsg(data.error_msg || '');
+          }
+          
+          if (isSubscribed && serverModels.length === 0) {
+            fetch(`${baseUrl}/api/models`).then(r => r.json()).then(d => {
+              if (isSubscribed && d.models) setServerModels(d.models);
+            }).catch(e => console.warn('Failed to fetch models list', e));
+          }
+        } else {
+          if (isSubscribed) setLocalApiStatus('offline');
+        }
+      } catch (e) {
+        if (isSubscribed) setLocalApiStatus('offline');
+      }
+    };
+    
+    checkStatus();
+    const interval = setInterval(checkStatus, 3000);
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
+  }, [config.provider, config.localEndpoint, serverModels.length]);
+
+  // Ollama models fetch effect
+  useEffect(() => {
+    if (config.provider !== 'ollama') return;
+    
+    let isSubscribed = true;
+    const fetchOllamaModels = async () => {
+      try {
+        const endpoint = config.localEndpoint || 'http://127.0.0.1:11434/api/chat';
+        const baseUrl = endpoint.replace(/\/api\/chat\/?$/, '');
+        const res = await fetch(`${baseUrl}/api/tags`);
+        if (res.ok) {
+          const data = await res.json();
+          if (isSubscribed && data.models) setOllamaModels(data.models);
+        }
+      } catch (e) {
+        console.warn('Failed to fetch ollama models', e);
+      }
+    };
+    fetchOllamaModels();
+    return () => { isSubscribed = false; };
+  }, [config.provider, config.localEndpoint]);
+
+  const handleSelectModel = (type: 'gguf' | 'folder') => {
+    setDirViewerMode(type);
+    setShowDirViewer(true);
+  };
+
+  const handleDirViewerSelect = (path: string) => {
+    setConfig(prev => ({ ...prev, localModelPath: path }));
+    setShowDirViewer(false);
+  };
+
+  const handleLoadModel = async () => {
+    if (!config.localModelPath) {
+      toast('モデルパスを選択してください', 'error');
+      return;
+    }
+    
+    try {
+      setLocalApiStatus('loading');
+      const baseUrl = config.localEndpoint?.replace('/api/chat-stream', '') || 'http://127.0.0.1:8000';
+      const res = await fetch(`${baseUrl}/api/load-model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_path: config.localModelPath })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast('モデルのロードを開始しました。完了までお待ちください。', 'success');
+    } catch (e: any) {
+      console.error(e);
+      toast('ロードリクエストに失敗: ' + e.message, 'error');
+    }
+  };
 
   const handleSave = () => {
     localStorage.setItem('llm_config', JSON.stringify(config));
@@ -102,10 +205,11 @@ export default function Settings() {
             className="btn btn-glass" 
             style={{ width: '100%', textAlign: 'left', appearance: 'auto', background: 'var(--bg-base)' }}
             value={config.provider}
-            onChange={e => setConfig({ ...config, provider: e.target.value as 'gemini' | 'local' })}
+            onChange={e => setConfig({ ...config, provider: e.target.value as Provider })}
           >
             <option value="gemini">Google Gemini 2.5 Flash (推奨・無料)</option>
-            <option value="local">Local LLM (llm-api / Ollama)</option>
+            <option value="ollama">Ollama (ローカル)</option>
+            <option value="local">llm-api (高度なローカル)</option>
           </select>
         </div>
 
@@ -143,19 +247,128 @@ export default function Settings() {
         </div>
 
         {config.provider === 'local' && (
-          <div className="fade-in">
-            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Local LLM エンドポイント</label>
+          <div className="fade-in glass-panel" style={{ padding: '16px', background: 'rgba(0,0,0,0.2)' }}>
+            <h3 style={{ fontSize: '1rem', marginBottom: '12px' }}>llm-api 設定</h3>
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>エンドポイント</label>
+            <input 
+              type="text" 
+              className="btn btn-glass" 
+              style={{ width: '100%', textAlign: 'left', cursor: 'text', marginBottom: '16px' }}
+              value={config.localEndpoint || 'http://127.0.0.1:8000/api/chat-stream'}
+              onChange={e => setConfig({ ...config, localEndpoint: e.target.value })}
+              placeholder="http://127.0.0.1:8000/api/chat-stream"
+            />
+
+            {localApiStatus === 'offline' ? (
+              <div style={{ color: '#ef4444', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <RefreshCw size={16} /> サーバーが応答しません。起動しているか確認してください。
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                  <span style={{ 
+                    display: 'inline-block', width: 10, height: 10, borderRadius: '50%',
+                    backgroundColor: localApiStatus === 'ready' ? '#10b981' : localApiStatus === 'loading' ? '#f59e0b' : localApiStatus === 'error' ? '#ef4444' : '#6b7280'
+                  }} />
+                  <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>
+                    状態: {localApiStatus.toUpperCase()}
+                  </span>
+                  {localApiStatus === 'loading' && <RefreshCw size={16} className="spin" />}
+                </div>
+
+                {loadedModelPath && (
+                  <div className="text-muted" style={{ fontSize: '0.8rem', marginBottom: '16px', wordBreak: 'break-all' }}>
+                    ロード済み: {loadedModelPath}
+                  </div>
+                )}
+                {loadErrorMsg && (
+                  <div style={{ color: '#ef4444', fontSize: '0.8rem', marginBottom: '16px' }}>
+                    エラー: {loadErrorMsg}
+                  </div>
+                )}
+
+                <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>モデルを選択してロード</label>
+                
+                {serverModels.length > 0 && (
+                  <select
+                    className="btn btn-glass"
+                    style={{ width: '100%', textAlign: 'left', appearance: 'auto', background: 'var(--bg-base)', marginBottom: '8px' }}
+                    value={config.localModelPath || ''}
+                    onChange={e => setConfig({ ...config, localModelPath: e.target.value })}
+                  >
+                    <option value="">-- サーバー上のモデルから選択 --</option>
+                    {serverModels.map(m => (
+                      <option key={m.path} value={m.path}>{m.name} ({m.type})</option>
+                    ))}
+                  </select>
+                )}
+
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                  <button className="btn btn-glass" style={{ flex: 1, padding: '8px', fontSize: '0.9rem' }} onClick={() => handleSelectModel('gguf')}>
+                    <File size={16} style={{ marginRight: '8px' }}/> PCからGGUF
+                  </button>
+                  <button className="btn btn-glass" style={{ flex: 1, padding: '8px', fontSize: '0.9rem' }} onClick={() => handleSelectModel('folder')}>
+                    <FolderOpen size={16} style={{ marginRight: '8px' }}/> PCからフォルダ
+                  </button>
+                </div>
+                
+                <input 
+                  type="text" 
+                  className="btn btn-glass" 
+                  style={{ width: '100%', textAlign: 'left', cursor: 'text', marginBottom: '8px' }}
+                  value={config.localModelPath || ''}
+                  onChange={e => setConfig({ ...config, localModelPath: e.target.value })}
+                  placeholder={serverModels.length > 0 ? "またはフルパスを手動入力..." : "モデルのパスを手動入力..."}
+                />
+
+                <button 
+                  className="btn btn-primary" 
+                  style={{ width: '100%', marginTop: '8px' }}
+                  onClick={handleLoadModel}
+                  disabled={localApiStatus === 'loading'}
+                >
+                  <RefreshCw size={16} style={{ marginRight: '8px' }}/> サーバーへロード
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {config.provider === 'ollama' && (
+          <div className="fade-in glass-panel" style={{ padding: '16px', background: 'rgba(0,0,0,0.2)' }}>
+            <h3 style={{ fontSize: '1rem', marginBottom: '12px' }}>Ollama 設定</h3>
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>エンドポイント</label>
+            <input 
+              type="text" 
+              className="btn btn-glass" 
+              style={{ width: '100%', textAlign: 'left', cursor: 'text', marginBottom: '16px' }}
+              value={config.localEndpoint || 'http://127.0.0.1:11434/api/chat'}
+              onChange={e => setConfig({ ...config, localEndpoint: e.target.value })}
+              placeholder="http://127.0.0.1:11434/api/chat"
+            />
+            
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>モデル名</label>
+            {ollamaModels.length > 0 && (
+              <select
+                className="btn btn-glass"
+                style={{ width: '100%', textAlign: 'left', appearance: 'auto', background: 'var(--bg-base)', marginBottom: '8px' }}
+                value={config.ollamaModel || ''}
+                onChange={e => setConfig({ ...config, ollamaModel: e.target.value })}
+              >
+                <option value="">-- インストール済みモデルから選択 --</option>
+                {ollamaModels.map(m => (
+                  <option key={m.name} value={m.name}>{m.name}</option>
+                ))}
+              </select>
+            )}
             <input 
               type="text" 
               className="btn btn-glass" 
               style={{ width: '100%', textAlign: 'left', cursor: 'text' }}
-              value={config.localEndpoint || ''}
-              onChange={e => setConfig({ ...config, localEndpoint: e.target.value })}
-              placeholder="http://127.0.0.1:8000/api/chat-stream"
+              value={config.ollamaModel || ''}
+              onChange={e => setConfig({ ...config, ollamaModel: e.target.value })}
+              placeholder={ollamaModels.length > 0 ? "またはモデル名を手動入力..." : "llama3, gemma, etc..."}
             />
-            <p className="text-muted" style={{ fontSize: '0.85rem', marginTop: '8px' }}>
-              ※ Ollamaを使用する場合は `http://127.0.0.1:11434/api/chat` 等に変更してください。
-            </p>
           </div>
         )}
 
@@ -229,6 +442,15 @@ export default function Settings() {
           </button>
         </div>
       </div>
+
+      {showDirViewer && (
+        <DirectoryViewer 
+          baseUrl={config.localEndpoint?.replace('/api/chat-stream', '') || 'http://127.0.0.1:8000'}
+          mode={dirViewerMode}
+          onSelect={handleDirViewerSelect}
+          onCancel={() => setShowDirViewer(false)}
+        />
+      )}
     </div>
   );
 }
