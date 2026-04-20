@@ -45,14 +45,30 @@ export function useLLM() {
       if (config.provider === 'local') {
         const endpoint = config.localEndpoint || 'http://127.0.0.1:8000/api/chat-stream';
         
-        // 自作 llm-api の仕様に合わせて、プロンプトを文字列に平坦化する
+        // GGUFモデル用にプロンプトを文字列に平坦化する
         const messageText = history.map(h => `${h.role === 'user' ? 'User' : 'Assistant'}: ${h.parts[0].text}`).join('\n') + '\nAssistant:';
         const fullPrompt = `${systemPrompt}\n\n${messageText}`;
+
+        // Transformersモデル用に構造化されたメッセージ配列を作成
+        const messagesPayload = [];
+        if (systemPrompt) {
+          messagesPayload.push({ role: 'system', content: systemPrompt });
+        }
+        history.forEach(h => {
+          messagesPayload.push({
+            role: h.role === 'user' ? 'user' : 'assistant',
+            content: h.parts[0].text
+          });
+        });
 
         const res = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: fullPrompt, max_tokens: 4096 })
+          body: JSON.stringify({ 
+            message: fullPrompt,
+            messages: messagesPayload,
+            max_tokens: 4096 
+          })
         });
 
         if (!res.ok) throw new Error(`Local API error: ${res.statusText}`);
