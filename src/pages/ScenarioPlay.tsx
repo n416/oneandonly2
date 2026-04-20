@@ -101,35 +101,36 @@ export default function ScenarioPlay() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenarioId, navigate]);
 
+  const loadAcquiredItems = async () => {
+    if (!scenarioId || !scenario) return;
+    const ents = await getEntitiesByScenarioId(Number(scenarioId));
+    const items = ents.filter(e => e.category === 'item' && e.acquired);
+    
+    const pArr = scenario.wizardData?.party || [];
+    const partyItems = pArr.filter((c: any) => c.type === 'アイテム');
+    
+    const result: any[] = [];
+    const addedNames = new Set();
+    
+    for (const it of partyItems) {
+      const nm = it.name || '無名アイテム';
+      if (!addedNames.has(nm)) {
+        addedNames.add(nm);
+        result.push({ name: nm, description: it.caption || it.special || '', imageData: it.imageData });
+      }
+    }
+    for (const it of items) {
+      const nm = it.name || '無名アイテム';
+      if (!addedNames.has(nm)) {
+        addedNames.add(nm);
+        result.push({ name: nm, description: it.description || '', imageData: it.imageData });
+      }
+    }
+    setAcquiredItems(result);
+  };
+
   useEffect(() => {
-    const loadItems = async () => {
-      if (!scenarioId || !scenario) return;
-      const ents = await getEntitiesByScenarioId(Number(scenarioId));
-      const items = ents.filter(e => e.category === 'item' && e.acquired);
-      
-      const pArr = scenario.wizardData?.party || [];
-      const partyItems = pArr.filter((c: any) => c.type === 'アイテム');
-      
-      const result: any[] = [];
-      const addedNames = new Set();
-      
-      for (const it of partyItems) {
-        const nm = it.name || '無名アイテム';
-        if (!addedNames.has(nm)) {
-          addedNames.add(nm);
-          result.push({ name: nm, description: it.caption || it.special || '', imageData: it.imageData });
-        }
-      }
-      for (const it of items) {
-        const nm = it.name || '無名アイテム';
-        if (!addedNames.has(nm)) {
-          addedNames.add(nm);
-          result.push({ name: nm, description: it.description || '', imageData: it.imageData });
-        }
-      }
-      setAcquiredItems(result);
-    };
-    loadItems();
+    loadAcquiredItems();
   }, [scenarioId, scenario, sceneHistory.length, isExtracting]);
 
   const handleUpdateScene = async (scn: SceneEntry, newText: string, isAction: boolean) => {
@@ -452,6 +453,18 @@ ${sceneTextJa || '(シーンなし)'}
     }
   };
 
+  const handleToggleAcquired = async (entity: any) => {
+    try {
+      const updated = { ...entity, acquired: !entity.acquired };
+      await updateEntity(updated);
+      toast(updated.acquired ? `「${entity.name}」を入手しました` : `「${entity.name}」を手放しました`, 'success');
+      loadEntities();
+      loadAcquiredItems();
+    } catch (e: any) {
+      toast('更新失敗: ' + e.message, 'error');
+    }
+  };
+
   const handleSaveAsCard = async (entity: any) => {
     try {
       const newChar = {
@@ -699,13 +712,6 @@ ${itemsText}
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button 
-            className={`btn ${showInventory ? 'btn-primary' : 'btn-glass'}`} 
-            onClick={() => setShowInventory(!showInventory)}
-            title="持ち物（取得アイテム）を確認する"
-          >
-            <Briefcase size={16} /> 持ち物 ({acquiredItems.length})
-          </button>
-          <button 
             className="btn btn-glass" 
             onClick={handleGenerateBackground} 
             disabled={isGeneratingBg || sceneHistory.length === 0}
@@ -895,9 +901,20 @@ ${itemsText}
       {/* 入力エリア */}
       <div className="glass-panel" style={{ padding: '16px', marginTop: 'auto', borderRadius: '16px 16px 0 0', display: 'flex', flexDirection: 'column', gap: '12px', zIndex: 10 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <label style={{ fontSize: '0.9rem', color: 'rgba(255,255,255,0.8)' }}>
-            プレイヤーの行動 {selectedItem && <span style={{ color: '#4ade80' }}>（アイテム「{selectedItem.name}」を使用）</span>}
-          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <label style={{ fontSize: '0.9rem', color: 'rgba(255,255,255,0.8)' }}>
+              プレイヤーの行動 {selectedItem && <span style={{ color: '#4ade80' }}>（アイテム「{selectedItem.name}」を使用）</span>}
+            </label>
+            <button 
+              className={`btn ${showInventory ? 'btn-primary' : 'btn-glass'}`} 
+              style={{ fontSize: '0.8rem', padding: '4px 12px', borderColor: showInventory ? 'transparent' : 'rgba(255,255,255,0.3)' }}
+              onClick={() => setShowInventory(!showInventory)}
+              title="持ち物（取得アイテム）を確認する"
+            >
+              <Briefcase size={14} style={{ marginRight: '4px' }}/>
+              持ち物 ({acquiredItems.length})
+            </button>
+          </div>
           <button 
             className="btn btn-glass" 
             style={{ fontSize: '0.8rem', padding: '4px 12px', borderColor: 'rgba(255,255,255,0.3)' }}
@@ -1033,6 +1050,15 @@ ${itemsText}
                       </div>
                       <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', margin: '0 0 16px 0', whiteSpace: 'pre-wrap' }}>{ent.description}</p>
                       <div style={{ display: 'flex', gap: '8px' }}>
+                        {ent.category === 'item' && (
+                          <button 
+                            className="btn btn-glass" 
+                            style={{ padding: '4px 12px', fontSize: '0.8rem', color: ent.acquired ? '#f44336' : '#4ade80', borderColor: ent.acquired ? '#f44336' : '#4ade80' }} 
+                            onClick={() => handleToggleAcquired(ent)}
+                          >
+                            {ent.acquired ? '手放す' : '入手する'}
+                          </button>
+                        )}
                         <button className="btn btn-glass" style={{ padding: '4px 12px', fontSize: '0.8rem' }} onClick={() => handleGenerateEntityImage(ent)}>画像生成</button>
                         <button className="btn btn-glass" style={{ padding: '4px 12px', fontSize: '0.8rem', color: '#f44336' }} onClick={() => handleDeleteEntity(ent.entityId)}>削除</button>
                       </div>
