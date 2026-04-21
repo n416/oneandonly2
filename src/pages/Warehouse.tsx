@@ -1,40 +1,102 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Trash2, RotateCcw, XCircle, Plus } from 'lucide-react';
+import { Trash2, RotateCcw, XCircle, Download, Upload, Layers } from 'lucide-react';
 import { loadCharacterData, saveCharacterData } from '../lib/indexedDB';
+import { getActiveDeckSlot, setActiveDeckSlot, getDeck, toggleCardInDeck, exportDecks, importDecks } from '../lib/deckManager';
 import Card, { CardData } from '../components/Card';
 import { StabilityApiClient } from '../lib/stabilityApiClient';
 import { useUI } from '../contexts/UIContext';
 
 export default function Warehouse() {
-  const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const mode = searchParams.get('mode') || 'menu';
-  const partyIdStr = searchParams.get('partyId');
-  
   const [activeTab, setActiveTab] = useState('すべて');
   const [cards, setCards] = useState<CardData[]>([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  // デッキ管理用ステート
+  const [activeSlot, setLocalActiveSlot] = useState(getActiveDeckSlot());
+  const [currentDeck, setCurrentDeck] = useState<string[]>([]);
+
   const { toast, alert, confirm } = useUI();
 
-  const fetchCards = async (tab: string) => {
+  const fetchCards = async (tab: string, currentDeckIds: string[]) => {
     const allData = await loadCharacterData();
     let filtered = allData;
     if (tab === 'ゴミ箱') {
       filtered = allData.filter((c: any) => c.group === 'Trash');
+    } else if (tab === 'デッキ') {
+      filtered = allData.filter((c: any) => currentDeckIds.includes(c.id));
     } else if (tab !== 'すべて') {
       filtered = allData.filter((c: any) => c.group === 'Warehouse' && (c.type || '').trim() === tab);
+    } else {
+      // 'すべて'のときは Warehouse のものを表示
+      filtered = allData.filter((c: any) => c.group === 'Warehouse');
     }
     setCards(filtered);
   };
 
   useEffect(() => {
-    fetchCards(activeTab);
+    const deckIds = getDeck(activeSlot);
+    setCurrentDeck(deckIds);
+    fetchCards(activeTab, deckIds);
     setIsSelectionMode(false);
     setSelectedIds(new Set());
-  }, [activeTab]);
+  }, [activeTab, activeSlot]);
+
+  const handleSlotChange = (slot: number) => {
+    setActiveDeckSlot(slot);
+    setLocalActiveSlot(slot);
+  };
+
+  const handleToggleDeck = (card: CardData) => {
+    const newDeck = toggleCardInDeck(activeSlot, card.id);
+    setCurrentDeck([...newDeck]);
+    if (activeTab === 'デッキ') {
+      // デッキタブを見ている時は一覧から消えるため再フェッチ
+      fetchCards(activeTab, newDeck);
+    }
+  };
+
+  const handleExport = () => {
+    const jsonStr = exportDecks();
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `decks_export_${new Date().getTime()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('デッキをエクスポートしました', 'success');
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const text = ev.target?.result as string;
+        const allData = await loadCharacterData();
+        const validIds = allData.map((c: any) => c.id);
+        
+        const success = importDecks(text, validIds);
+        if (success) {
+          toast('デッキをインポートしました', 'success');
+          // リロード
+          const deckIds = getDeck(activeSlot);
+          setCurrentDeck(deckIds);
+          fetchCards(activeTab, deckIds);
+        } else {
+          toast('インポートに失敗しました', 'error');
+        }
+      } catch (err) {
+        toast('ファイル読み込みに失敗しました', 'error');
+      }
+    };
+    reader.readAsText(file);
+    // 同じファイルを再選択できるようにリセット
+    e.target.value = '';
+  };
 
   const handleCardClick = (card: CardData) => {
     if (isSelectionMode) {
@@ -60,7 +122,7 @@ export default function Warehouse() {
       return c;
     });
     await saveCharacterData(updated);
-    await fetchCards(activeTab);
+    await fetchCards(activeTab, currentDeck);
     setSelectedIds(new Set());
     setIsSelectionMode(false);
   };
@@ -73,7 +135,7 @@ export default function Warehouse() {
     const allData = await loadCharacterData();
     const updated = allData.filter((c: any) => c.id !== card.id);
     await saveCharacterData(updated);
-    await fetchCards(activeTab);
+    await fetchCards(activeTab, currentDeck);
   };
 
   const handleGenerateImage = async (card: CardData) => {
@@ -111,7 +173,7 @@ export default function Warehouse() {
         const allData = await loadCharacterData();
         const updated = allData.map((c: any) => c.id === card.id ? { ...c, imageData: dataUrl } : c);
         await saveCharacterData(updated);
-        await fetchCards(activeTab);
+        await fetchCards(activeTab, currentDeck);
         toast("画像を生成しました！", "success");
       }
     } catch (err: any) {
@@ -120,23 +182,18 @@ export default function Warehouse() {
     }
   };
 
-  const handleActionSelected = async (action: 'trash' | 'restore' | 'party' | 'delete') => {
+  const handleActionSelected = async (action: 'trash' | 'restore' | 'delete') => {
     if (selectedIds.size === 0) return;
     const ids = Array.from(selectedIds);
     if (action === 'trash') await updateCardGroup(ids, 'Trash');
     if (action === 'restore') await updateCardGroup(ids, 'Warehouse');
-    if (action === 'party') {
-      if (!partyIdStr) return;
-      await updateCardGroup(ids, 'Party', parseInt(partyIdStr, 10));
-      navigate(`/party-setup/${partyIdStr}`);
-    }
     if (action === 'delete') {
       const ok = await confirm(`選択した${ids.length}件を完全に削除しますか？`);
       if (!ok) return;
       const allData = await loadCharacterData();
       const updated = allData.filter((c: any) => !selectedIds.has(c.id));
       await saveCharacterData(updated);
-      await fetchCards(activeTab);
+      await fetchCards(activeTab, currentDeck);
       setSelectedIds(new Set());
       setIsSelectionMode(false);
     }
@@ -145,23 +202,18 @@ export default function Warehouse() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', maxWidth: '1200px', margin: '0 auto', position: 'relative' }}>
       <header style={{ marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '16px' }}>
-        {mode === 'party' && (
-          <button className="btn btn-glass" onClick={() => navigate(`/party-setup/${partyIdStr}`)} title="編成に戻る">
-            <ArrowLeft size={20} />
-          </button>
-        )}
         <div>
-          <h1 className="text-display" style={{ fontSize: '2rem', marginBottom: '4px' }}>
-            {activeTab === 'ゴミ箱' ? 'ゴミ箱' : '倉庫'}
+          <h1 className="text-display" style={{ fontSize: '2rem', marginBottom: '4px', background: 'linear-gradient(to right, #e879f9, #a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+            {activeTab === 'ゴミ箱' ? 'Trash' : 'Collection'}
           </h1>
           <p className="text-secondary" style={{ fontSize: '0.9rem' }}>
-            {mode === 'party' ? 'パーティに追加するカードを選択してください' : '保管されているカードの管理'}
+            所持しているカードの管理とデッキの編成
           </p>
         </div>
       </header>
 
       <div className="glass-panel" style={{ padding: '8px', marginBottom: '12px', display: 'flex', gap: '8px', overflowX: 'auto' }}>
-        {['すべて', 'キャラクター', 'アイテム', 'モンスター', 'ゴミ箱'].map(tab => (
+        {['すべて', 'キャラクター', 'アイテム', 'モンスター', 'デッキ', 'ゴミ箱'].map(tab => (
           <button 
             key={tab}
             className={`btn ${activeTab === tab ? 'btn-primary' : 'btn-glass'}`}
@@ -171,6 +223,8 @@ export default function Warehouse() {
           </button>
         ))}
       </div>
+
+
 
       {/* Toolbar */}
       <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between' }}>
@@ -184,17 +238,9 @@ export default function Warehouse() {
           </button>
           
           {isSelectionMode && selectedIds.size > 0 && activeTab !== 'ゴミ箱' && (
-            <>
-              {mode === 'party' ? (
-                <button className="btn btn-primary" onClick={() => handleActionSelected('party')}>
-                  <Plus size={18} style={{ marginRight: '8px' }}/> パーティに追加 ({selectedIds.size})
-                </button>
-              ) : (
-                <button className="btn" style={{ background: '#e6a800', color: 'white' }} onClick={() => handleActionSelected('trash')}>
-                  <Trash2 size={18} style={{ marginRight: '8px' }}/> ゴミ箱へ ({selectedIds.size})
-                </button>
-              )}
-            </>
+            <button className="btn" style={{ background: '#e6a800', color: 'white' }} onClick={() => handleActionSelected('trash')}>
+              <Trash2 size={18} style={{ marginRight: '8px' }}/> ゴミ箱へ ({selectedIds.size})
+            </button>
           )}
 
           {isSelectionMode && selectedIds.size > 0 && activeTab === 'ゴミ箱' && (
@@ -210,7 +256,7 @@ export default function Warehouse() {
         </div>
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '8px', paddingBottom: '120px' }}>
         {cards.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '48px', color: 'rgba(255,255,255,0.3)' }}>
             カードがありません
@@ -220,7 +266,7 @@ export default function Warehouse() {
             {cards.map(c => (
               <Card 
                 key={c.id} 
-                card={c} 
+                card={{...c, inDeck: currentDeck.includes(c.id)}} 
                 isSelectionMode={isSelectionMode} 
                 isSelected={selectedIds.has(c.id)}
                 onCardClick={handleCardClick}
@@ -228,10 +274,109 @@ export default function Warehouse() {
                 onRestore={activeTab === 'ゴミ箱' ? handleRestoreSingle : undefined}
                 onDeletePermanent={activeTab === 'ゴミ箱' ? handleDeletePermanentSingle : undefined}
                 onGenerateImage={activeTab !== 'ゴミ箱' ? handleGenerateImage : undefined}
+                onToggleDeck={activeTab !== 'ゴミ箱' ? handleToggleDeck : undefined}
               />
             ))}
           </div>
         )}
+      </div>
+
+      {/* Floating Deck Tray */}
+      <div style={{
+        position: 'fixed',
+        bottom: '32px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        background: 'rgba(15, 15, 20, 0.7)',
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+        border: '1px solid rgba(255, 255, 255, 0.1)',
+        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.05)',
+        borderRadius: '24px',
+        padding: '8px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '24px',
+        zIndex: 50,
+        transition: 'all 0.3s ease'
+      }}>
+        {/* Left: Slot Selector */}
+        <div style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.3)', padding: '4px', borderRadius: '20px' }}>
+          {[1, 2, 3, 4].map(slot => {
+            const roman = ['I', 'II', 'III', 'IV'][slot - 1];
+            const isActive = activeSlot === slot;
+            return (
+              <button
+                key={slot}
+                onClick={() => handleSlotChange(slot)}
+                style={{
+                  background: isActive ? 'linear-gradient(135deg, #d946ef, #8b5cf6)' : 'transparent',
+                  color: isActive ? '#fff' : 'rgba(255,255,255,0.5)',
+                  border: 'none',
+                  borderRadius: '16px',
+                  width: '36px',
+                  height: '32px',
+                  fontSize: '0.85rem',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  transition: 'all 0.3s ease',
+                  boxShadow: isActive ? '0 2px 8px rgba(217, 70, 239, 0.4)' : 'none'
+                }}
+                title={`Deck ${slot}`}
+              >
+                {roman}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Center: Active Deck Cards Thumbnails */}
+        <div style={{ display: 'flex', gap: '8px', minWidth: '120px', alignItems: 'center', justifyContent: 'center' }}>
+          {currentDeck.length === 0 ? (
+            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.85rem', fontStyle: 'italic' }}>No cards in deck</span>
+          ) : (
+            currentDeck.map(id => {
+              const c = cards.find(x => x.id === id);
+              if (!c) return null;
+              return (
+                <div key={id} style={{
+                  width: '36px', height: '36px', borderRadius: '50%', overflow: 'hidden', 
+                  border: '1px solid rgba(236, 72, 153, 0.5)',
+                  background: '#222', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  boxShadow: '0 0 10px rgba(236, 72, 153, 0.2)'
+                }} title={c.name}>
+                  {c.imageData ? (
+                    <img src={c.imageData} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  ) : (
+                    <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{c.name.charAt(0)}</span>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Right: Actions */}
+        <div style={{ display: 'flex', gap: '8px', borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '16px' }}>
+          <button 
+            style={{ background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', padding: '4px', transition: 'color 0.2s' }}
+            title="現在のデッキをエクスポート"
+            onClick={handleExport}
+            onMouseOver={e => e.currentTarget.style.color = '#fff'}
+            onMouseOut={e => e.currentTarget.style.color = 'rgba(255,255,255,0.7)'}
+          >
+            <Download size={18} />
+          </button>
+          <label 
+            style={{ background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', padding: '4px', transition: 'color 0.2s', display: 'flex', alignItems: 'center' }}
+            title="デッキをインポート"
+            onMouseOver={e => e.currentTarget.style.color = '#fff'}
+            onMouseOut={e => e.currentTarget.style.color = 'rgba(255,255,255,0.7)'}
+          >
+            <Upload size={18} />
+            <input type="file" accept=".json" style={{ display: 'none' }} onChange={handleImport} />
+          </label>
+        </div>
       </div>
     </div>
   );

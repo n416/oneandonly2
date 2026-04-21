@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, LayoutDashboard, Users, Archive, UserPlus, BookOpen, Settings, Save, ImageIcon, Library, Volume2, VolumeX } from 'lucide-react';
+import { Menu, X, LayoutDashboard, Archive, UserPlus, BookOpen, Settings, Save, ImageIcon, Library, Volume2, VolumeX } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import SaveLoadModal from '../SaveLoadModal';
 import BgImageModal from '../BgImageModal';
@@ -106,8 +106,7 @@ export default function AppLayout() {
 
   const navItems = [
     { path: '/', label: 'ホーム', icon: LayoutDashboard },
-    { path: '/party', label: 'パーティ', icon: Users },
-    { path: '/warehouse', label: '倉庫', icon: Archive },
+    { path: '/warehouse', label: '倉庫・デッキ', icon: Archive },
     { path: '/character', label: 'キャラ作成', icon: UserPlus },
     { path: '/avatar', label: 'アバター', icon: UserPlus },
     { path: '/scenario', label: 'シナリオ', icon: BookOpen },

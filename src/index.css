@@ -252,35 +252,200 @@ body {
   background: var(--text-muted);
 }
 
-/* Card Styles from original TRPG */
+/* Card Styles from original TRPG (Redesigned for Premium UI) */
 #card-container, #party-modal-card-container, #warehouse-card-container {
-  margin-top: 10px; box-sizing: border-box; display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; width: 100%;
+  margin-top: 10px; box-sizing: border-box; display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; width: 100%;
 }
-.card { width: 100%; aspect-ratio: 63 / 88; perspective: 1000px; cursor: pointer; transition: transform 0.3s ease; position: relative; max-width: 300px; overflow: hidden; }
-.card-inner { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform-style: preserve-3d; transition: transform 0.6s; }
+
+.card { 
+  width: 100%; aspect-ratio: 63 / 88; cursor: pointer; position: relative; max-width: 220px; overflow: visible; 
+  /* マウス連動3Dティルト用 */
+  transform: translateY(var(--translate-y, 0)) perspective(1000px) rotateX(var(--ry, 0deg)) rotateY(var(--rx, 0deg));
+  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.card:hover {
+  --translate-y: -8px;
+  transform: translateY(var(--translate-y)) scale(1.02) perspective(1000px) rotateX(var(--ry, 0deg)) rotateY(var(--rx, 0deg));
+  transition: transform 0.1s ease-out; /* 追従をスムーズに */
+}
+.card-inner { 
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform-style: preserve-3d; transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1); 
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+}
 .card.flipped .card-inner { transform: rotateY(180deg); }
-.card-front, .card-back { color: #222; position: absolute; top: 0; left: 0; width: 100%; height: 100%; border-radius: 2%; backface-visibility: hidden; box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2); }
-.card-front { box-sizing: border-box; padding: 3%; background-color: #fff; display: flex; flex-direction: column; position: relative; }
-.card-front h3 { padding: 0; margin: 0; font-size: 1rem; }
-.card-front .card-type { position: absolute; right: 10px; background-color: rgba(255, 255, 255, 0.8); padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.85rem; z-index: 2; }
-.card-front .card-image { width: 100%; aspect-ratio: 16 / 12; background: linear-gradient(135deg, #cccccc70, #eeeeee70); display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+
+/* =========================================
+   Holographic Foil Effects (Pokemon TCG Style)
+   ========================================= */
+.card-glare, .card-hologram {
+  position: absolute;
+  top: 0; left: 0; width: 100%; height: 100%;
+  border-radius: 16px;
+  pointer-events: none;
+  z-index: 10;
+  opacity: var(--h-opacity, 0);
+  transition: opacity 0.4s ease;
+  overflow: hidden;
+}
+
+/* カード裏面ではエフェクト非表示 */
+.card.flipped .card-glare,
+.card.flipped .card-hologram {
+  opacity: 0 !important;
+}
+
+/* 光の反射（全レアリティ共通ベース） */
+.card-glare {
+  background: radial-gradient(
+    farthest-corner circle at var(--pointer-x, 50%) var(--pointer-y, 50%),
+    rgba(255, 255, 255, 0.3) 0%,
+    rgba(255, 255, 255, 0) 60%
+  );
+  mix-blend-mode: overlay;
+}
+
+/* ★1, ★2 (Silver / Bronze) */
+.card.rarity1 .card-hologram, .card.rarity2 .card-hologram {
+  background: linear-gradient(
+    105deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.15) 25%,
+    rgba(255, 255, 255, 0.4) 28%,
+    rgba(255, 255, 255, 0.15) 31%,
+    transparent 36%
+  );
+  background-size: 200% 200%;
+  background-position: var(--pointer-x, 50%) var(--pointer-y, 50%);
+  mix-blend-mode: soft-light;
+}
+
+/* ★3 (Gold) */
+.card.rarity3 .card-hologram {
+  background: linear-gradient(
+    105deg,
+    transparent 15%,
+    rgba(255, 215, 0, 0.3) 22%,
+    rgba(255, 255, 255, 0.6) 25%,
+    rgba(255, 215, 0, 0.3) 28%,
+    transparent 35%
+  );
+  background-size: 250% 250%;
+  background-position: var(--pointer-x, 50%) var(--pointer-y, 50%);
+  mix-blend-mode: color-dodge;
+}
+
+/* ★4 (Platinum/Rainbow Foil) - 上品な虹色光沢 */
+.card.rarity4 .card-hologram {
+  background: linear-gradient(
+    115deg,
+    transparent 20%,
+    rgba(255, 192, 203, 0.25) 30%,
+    rgba(173, 216, 230, 0.25) 40%,
+    rgba(255, 255, 224, 0.25) 50%,
+    rgba(152, 251, 152, 0.25) 60%,
+    transparent 70%
+  );
+  background-size: 300% 300%;
+  background-position: calc(var(--pointer-x, 50%) * 1.5) calc(var(--pointer-y, 50%) * 1.5);
+  mix-blend-mode: overlay;
+}
+
+/* ★5 (Secret Rare/Prism) - 毒々しい色を排し、煌めく白銀・虹色・ホログラムグリッターへ */
+.card.rarity5 .card-hologram {
+  background: 
+    radial-gradient(
+      farthest-corner circle at var(--pointer-x, 50%) var(--pointer-y, 50%),
+      rgba(255, 255, 255, 0.6) 0%,
+      rgba(200, 200, 255, 0.2) 30%,
+      transparent 60%
+    ),
+    repeating-linear-gradient(
+      45deg,
+      transparent,
+      rgba(255, 255, 255, 0.1) 2px,
+      transparent 4px,
+      rgba(255, 180, 255, 0.1) 6px,
+      transparent 8px
+    );
+  background-size: 150% 150%, 150% 150%;
+  background-position: center, calc(var(--pointer-x, 50%) * 1.2) calc(var(--pointer-y, 50%) * 1.2);
+  mix-blend-mode: overlay;
+}
+
+.card-front, .card-back { 
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+  border-radius: 16px; backface-visibility: hidden; 
+  background: rgba(15, 17, 26, 0.95); /* 視認性向上のため暗く */
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  overflow: hidden;
+}
+
+.card-front { 
+  display: flex; flex-direction: column; position: relative; 
+}
+
+/* Card Type Badge */
+.card-front .card-type { 
+  position: absolute; top: 12px; left: 12px; 
+  background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px);
+  padding: 4px 10px; border-radius: 20px; font-weight: 600; font-size: 0.75rem; 
+  color: #fff; z-index: 2; border: 1px solid rgba(255,255,255,0.1);
+}
+
+/* Image Area */
+.card-front .card-image { 
+  width: 100%; aspect-ratio: 4 / 3; 
+  background: linear-gradient(135deg, #1a1a2e, #16213e); 
+  display: flex; align-items: center; justify-content: center; 
+  overflow: hidden; position: relative; border-bottom: 1px solid rgba(255,255,255,0.05);
+}
 .card-front .card-image img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
-.card-front .gen-image-btn { position: absolute; bottom: 8px; right: 8px; padding: 4px 8px; background-color: rgba(0, 0, 0, 0.6); color: #fff; border: none; border-radius: 4px; font-size: 0.8rem; z-index: 2; box-shadow: none; background-image: none; }
-.gen-image-btn:disabled { background-color: #999; color: #ccc; cursor: not-allowed; opacity: 0.6; }
-.card-front .card-info { padding: 8px; display: flex; flex-direction: column; gap: 4px; flex-grow: 1; overflow: auto; background-color: rgba(255, 255, 255, 0.7); }
-.card-front .card-info p { margin: 0; font-size: 0.85rem; }
-.card-front .card-info p:last-child { padding: 0; height: 100%; font-size: 0.85rem; align-items: center; display: flex; background-color: #eee; margin-top: 10px; }
-.card-front .card-info p:last-child span { transform: skew(-5deg); display: flex; padding: 10px; }
-.card-back { box-sizing: border-box; background: linear-gradient(135deg, #1e3c72, #2a5298); color: #fff; transform: rotateY(180deg); display: flex; align-items: center; justify-content: center; font-size: 1.2rem; padding: 10px; text-align: center; }
-.bezel { position: absolute; top: 0; left: 0; pointer-events: none; height: 100%; width: 100%; box-sizing: border-box; z-index: 100; border-radius: 2%; padding: 3%; }
-.bezel.rarity0, .bezel.rarity2 { background: linear-gradient(145deg, #c0c0c0, #d3d3d3, #e0e0e0, #a9a9a9); mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: destination-out; mask-composite: exclude; background-clip: padding-box, border-box; }
-.bezel.rarity1 { background: linear-gradient(145deg, #b87333, #da8a67, #e97451, #c35817); mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: destination-out; mask-composite: exclude; background-clip: padding-box, border-box; }
-.bezel.rarity3 { background: linear-gradient(145deg, #b69a00, #ffda64, #ffda6b, #d79000); mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: destination-out; mask-composite: exclude; background-clip: padding-box, border-box; }
-.bezel.rarity4 { position: absolute; background: linear-gradient(145deg, #d1d1d1, #aeb9ff, #c0c0c0, #ecebe8); background-size: 400% 400%; mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: destination-out; mask-composite: exclude; background-clip: padding-box, border-box; animation: platinum-shimmer 5s ease-in-out infinite; }
-.bezel.rarity5 { background: linear-gradient(145deg, #4b0082, #0000cd, #008080, #fff); background-size: 150% 150%; mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: destination-out; mask-composite: exclude; background-clip: padding-box, border-box; animation: jewel-glow 5s ease-in-out infinite; }
-@keyframes platinum-shimmer { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
-@keyframes jewel-glow { 0% { filter: brightness(1); background-position: 0% 50%; } 50% { filter: brightness(1.2); background-position: 100% 50%; } 100% { filter: brightness(1); background-position: 0% 50%; } }
-.card.selected .bezel { outline: 10px solid #f44336; outline-offset: -10px; background-image: none; -webkit-mask-image: none; background-color: #0000004d; }
+
+/* Generate Image Button */
+.card-front .gen-image-btn { 
+  position: absolute; bottom: 8px; right: 8px; padding: 6px 12px; 
+  background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px);
+  color: #fff; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; font-size: 0.8rem; z-index: 2; transition: all 0.2s;
+}
+.gen-image-btn:hover { background: rgba(99, 102, 241, 0.8); }
+.gen-image-btn:disabled { background: #333; color: #888; cursor: not-allowed; }
+
+/* Info Area */
+.card-front .card-info { 
+  padding: 16px; display: flex; flex-direction: column; gap: 6px; flex-grow: 1; overflow-y: auto; 
+  color: #f8fafc;
+  
+  /* カードの背景色と自然に溶け込むよう、下からのグラデーションに変更 */
+  background: linear-gradient(to top, rgba(15, 17, 26, 0.95) 0%, rgba(15, 17, 26, 0.7) 60%, transparent 100%);
+}
+.card-front .card-info::-webkit-scrollbar { display: none; }
+
+.card-front h3 { padding: 0; margin: 0 0 4px 0; font-size: 1.1rem; font-weight: 700; line-height: 1.3; color: #fff; }
+.card-front .card-info p { margin: 0; font-size: 0.85rem; color: #cbd5e1; line-height: 1.4; }
+.card-front .card-info p strong { color: #fff; font-weight: 600; }
+
+.card-front .card-info p:last-child { 
+  padding: 0; font-size: 0.8rem; align-items: flex-start; display: flex; 
+  margin-top: 8px; color: var(--text-muted); font-style: italic;
+}
+
+/* Card Back */
+.card-back { 
+  background: linear-gradient(135deg, rgba(15, 17, 26, 0.95), rgba(30, 27, 75, 0.95)); 
+  color: #fff; transform: rotateY(180deg); display: flex; flex-direction: column; align-items: center; justify-content: center; 
+  padding: 20px; text-align: center; gap: 16px;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  box-shadow: inset 0 0 40px rgba(99, 102, 241, 0.1);
+}
+
+/* Selected State */
+.card.selected .card-front, .card.selected .card-back { 
+  border: 2px solid var(--accent); 
+  box-shadow: 0 0 20px var(--accent-glow);
+}
 
 /* =========================================
    Carousel UI (Scroll-Snap based)

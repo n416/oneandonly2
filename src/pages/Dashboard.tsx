@@ -50,13 +50,9 @@ export default function Dashboard() {
           <UserPlus size={18} />
           生成
         </Link>
-        <Link to="/party" id="party-list" data-tutorial="target-party" className="btn btn-glass">
-          <Users size={18} />
-          パーティ
-        </Link>
         <Link to="/warehouse" id="show-warehouse-btn" data-tutorial="target-warehouse" className="btn btn-glass">
           <Archive size={18} />
-          倉庫
+          倉庫・デッキ
         </Link>
       </div>
 

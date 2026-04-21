@@ -7,7 +7,7 @@ import {
   getSceneSummaryByChunkIndex, addSceneSummaryRecord, addEntity, getEntitiesByScenarioId, getEnding, saveEnding,
   updateEntity, deleteEntity, saveCharacterData, loadCharacterData
 } from '../lib/indexedDB';
-import { useLLM } from '../hooks/useLLM';
+import { useLLM, cleanStreamText, extractJsonArray, extractJsonObject } from '../hooks/useLLM';
 import { useUI } from '../contexts/UIContext';
 import { StabilityApiClient } from '../lib/stabilityApiClient';
 
@@ -39,6 +39,7 @@ export default function ScenarioPlay() {
   const { scenarioId } = useParams<{ scenarioId: string }>();
   const navigate = useNavigate();
   const { generateResponse, isGenerating } = useLLM();
+  const [streamText, setStreamText] = useState('');
 
   const [scenario, setScenario] = useState<any>(null);
   const [sceneHistory, setSceneHistory] = useState<SceneEntry[]>([]);
@@ -251,7 +252,10 @@ export default function ScenarioPlay() {
     }
 
     try {
-      const result = await generateResponse(prompt, []);
+      setStreamText('');
+      const result = await generateResponse(prompt, [], undefined, (chunk) => {
+        setStreamText(prev => prev + chunk);
+      });
       if (!result) throw new Error('APIから応答がありません');
 
       const sceneIdHash = `scene_${Date.now()}`;
@@ -381,9 +385,9 @@ ${sceneTextJa || '(シーンなし)'}
       const prompt = `あなたはTRPGの情報を整理するAIです。以下のシナリオテキスト全体を読み、物語に登場した重要な【アイテム】や【キャラクター】(モンスター含む)を抽出してください。既に抽出済みのリストも参考に、重複を避け、新たに見つかったものだけをリストアップしてください。\n\n抽出済リスト:\n${existingDesc}\n\nシナリオテキスト:\n---\n${scenarioText}\n---\n\n出力形式は以下のJSON配列形式のみとしてください。説明や前置きは不要です。日本語で記述し、固有名詞が英語の場合はカタカナにしてください。プレイヤーが入手したと思われるアイテムには "acquired": true を設定してください。\n例: [{"category":"item","name":"古い鍵","description":"錆びついた銅製の鍵。","acquired":true}, {"category":"character","name":"ゴブリン","description":"小柄で緑色の肌を持つモンスター。","acquired":false}]\n\n新たに見つかったエンティティリスト(JSON配列):`;
       
       const response = await generateResponse(prompt, []);
-      const jsonMatch = response.match(/\[\s*\{[\s\S]*\}\s*\]/);
-      if (jsonMatch && jsonMatch[0]) {
-        const newEntities = JSON.parse(jsonMatch[0]);
+      const jsonArrStr = extractJsonArray(response);
+      if (jsonArrStr) {
+        const newEntities = JSON.parse(jsonArrStr);
         let addedCount = 0;
         for (const e of newEntities) {
           if (e.name && e.category) {
@@ -542,7 +546,11 @@ ${sectionText}
 
 エンディングストーリー(${endTypePrompt}):`;
 
-      const story = await generateResponse(prompt, []);
+      setEndingText('');
+      setStreamText('');
+      const story = await generateResponse(prompt, [], undefined, (chunk) => {
+        setStreamText(prev => prev + chunk);
+      });
       setEndingText(story);
       await saveEnding(Number(scenarioId), type, story);
     } catch (e: any) {
@@ -662,10 +670,9 @@ ${itemsText}
 }`;
 
       const response = await generateResponse(prompt, []);
-      const cleanJsonString = response.replace(/^```json\s*|```$/g, '').trim();
-      const match = cleanJsonString.match(/\{[\s\S]*\}/);
-      if (match) {
-        const parsed = JSON.parse(match[0]);
+      const jsonObjStr = extractJsonObject(response);
+      if (jsonObjStr) {
+        const parsed = JSON.parse(jsonObjStr);
         if (parsed.options && Array.isArray(parsed.options)) {
           // Fisher-Yates Shuffle
           const shuffled = [...parsed.options];
@@ -836,9 +843,25 @@ ${itemsText}
         )}
 
         {isGenerating && (
-          <div className="glass-panel animate-pulse" style={{ padding: '16px', borderRadius: '16px 16px 16px 0', alignSelf: 'flex-start', maxWidth: '80%' }}>
-            <div style={{ fontSize: '0.8rem', color: '#a78bfa', marginBottom: '8px' }}>ゲームマスター (GM)</div>
-            <div style={{ color: 'rgba(255,255,255,0.5)' }}>シーンを生成中...</div>
+          <div className="glass-panel" style={{ padding: '16px', borderRadius: '16px 16px 16px 0', alignSelf: 'flex-start', maxWidth: '80%', border: '1px solid rgba(167, 139, 250, 0.3)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', color: '#a78bfa' }}>
+              <div style={{ fontSize: '0.8rem' }}>ゲームマスター (GM)</div>
+              {!streamText && <span className="loading" style={{ width: '10px', height: '10px', borderWidth: '2px', margin: 0 }}></span>}
+            </div>
+            {streamText ? (
+              <div style={{ 
+                lineHeight: 1.6, 
+                whiteSpace: 'pre-wrap', 
+                color: '#e2e8f0',
+                fontFamily: '"Courier New", Courier, monospace',
+                fontSize: '0.95rem'
+              }}>
+                {cleanStreamText(streamText)}
+                <span className="blink-cursor" style={{ marginLeft: '4px' }}>_</span>
+              </div>
+            ) : (
+              <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.9rem' }}>シーンを生成中...</div>
+            )}
           </div>
         )}
         <div ref={historyEndRef} />
@@ -854,7 +877,15 @@ ${itemsText}
             {showEndingType === 'clear' ? 'クリアエンディング' : 'バッドエンディング'}
           </h2>
           <div className="glass-panel" style={{ flex: 1, overflowY: 'auto', padding: '24px', whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
-            {isGenerating && !endingText ? 'エンディングを生成中...' : endingText}
+            {isGenerating && streamText ? (
+              <div style={{ fontFamily: '"Courier New", Courier, monospace', color: '#e2e8f0' }}>
+                {cleanStreamText(streamText)}<span className="blink-cursor">_</span>
+              </div>
+            ) : isGenerating && !endingText ? (
+              'エンディングを生成中...'
+            ) : (
+              endingText
+            )}
           </div>
           <div style={{ textAlign: 'center', marginTop: '24px' }}>
             <div style={{ display: 'flex', gap: '8px' }}>

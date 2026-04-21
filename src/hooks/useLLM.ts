@@ -1,5 +1,52 @@
 import { useState } from 'react';
 
+// JSONの生テキストから不要なノイズ（括弧、キー、クォーテーション等）を除去し、
+// ストリーミング表示用のプレーンテキストを抽出するユーティリティ関数
+export function cleanStreamText(rawText: string): string {
+  if (!rawText) return '';
+  
+  let cleaned = rawText;
+  
+  // 1. マークダウンのコードブロック(```json, ```)を除去
+  cleaned = cleaned.replace(/```(?:json)?/g, '');
+  
+  // 2. JSONのキーっぽい部分 ("title": , "summary": など) を除去
+  // 例: "title": または "summaryEn" : などを消す
+  cleaned = cleaned.replace(/"[a-zA-Z0-9_]+"\s*:\s*/g, '');
+  
+  // 3. 括弧とクォーテーション、カンマを除去
+  // {, }, [, ], ", ,
+  cleaned = cleaned.replace(/[{}\[\]",]/g, '');
+  
+  // 4. HTMLタグの除去 (万が一出力された場合)
+  cleaned = cleaned.replace(/<[^>]*>?/gm, '');
+  
+  // 5. 連続する改行を整理
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+  
+  return cleaned.trim();
+}
+
+// テキスト中から最初の有効なJSONオブジェクト({ ... })を安全に抽出する
+export function extractJsonObject(text: string): string | null {
+  const startIdx = text.indexOf('{');
+  const endIdx = text.lastIndexOf('}');
+  if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
+    return text.substring(startIdx, endIdx + 1);
+  }
+  return null;
+}
+
+// テキスト中から最初の有効なJSON配列([ ... ])を安全に抽出する
+export function extractJsonArray(text: string): string | null {
+  const startIdx = text.indexOf('[');
+  const endIdx = text.lastIndexOf(']');
+  if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
+    return text.substring(startIdx, endIdx + 1);
+  }
+  return null;
+}
+
 export type Provider = 'gemini' | 'local' | 'ollama';
 
 export interface LLMConfig {
@@ -213,3 +260,5 @@ export function useLLM() {
 
   return { generateResponse, isGenerating };
 }
+
+// force vite update

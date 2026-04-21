@@ -1,20 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useLLM } from '../hooks/useLLM';
-import { listAllParties, createNewScenario } from '../lib/indexedDB';
-import { Users, BookOpen, Compass, Target, ArrowRight, ArrowLeft, Play } from 'lucide-react';
+import { useLLM, cleanStreamText, extractJsonObject } from '../hooks/useLLM';
+import { createNewScenario, loadCharacterData } from '../lib/indexedDB';
+import { getActiveDeckSlot, getDeck } from '../lib/deckManager';
+import { BookOpen, Compass, Target, ArrowRight, ArrowLeft, Sparkles, Play } from 'lucide-react';
 import { useUI } from '../contexts/UIContext';
 
 export default function ScenarioWizard() {
   const navigate = useNavigate();
   const { generateResponse, isGenerating } = useLLM();
+  const [streamText, setStreamText] = useState('');
   const { toast } = useUI();
 
   const [step, setStep] = useState(0);
-
-  // Step 0 Data
-  const [parties, setParties] = useState<any[]>([]);
-  const [selectedPartyId, setSelectedPartyId] = useState<number | null>(null);
 
   // Step 1 Data
   const [inputType, setInputType] = useState<'axis' | 'free'>('axis');
@@ -33,17 +31,6 @@ export default function ScenarioWizard() {
   // Step 3 Data
   const [generatedScenario, setGeneratedScenario] = useState<any>(null);
 
-  useEffect(() => {
-    async function loadParties() {
-      try {
-        const pts = await listAllParties();
-        setParties(pts);
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    loadParties();
-  }, []);
 
   const getGenreString = () => {
     if (inputType === 'free') return freeInput || '指定なし';
@@ -81,13 +68,15 @@ export default function ScenarioWizard() {
 出力は純粋なJSONのみとし、他のマークダウンやテキストは含めないでください。`;
 
     try {
-      const response = await generateResponse(prompt, []);
-      const cleaned = response.replace(/^```json\s*|```$/g, '').trim();
-      const match = cleaned.match(/\{[\s\S]*\}/);
-      if (match) {
-        const parsed = JSON.parse(match[0]);
+      setStreamText('');
+      const response = await generateResponse(prompt, [], undefined, (chunk) => {
+        setStreamText(prev => prev + chunk);
+      });
+      const jsonStr = extractJsonObject(response);
+      if (jsonStr) {
+        const parsed = JSON.parse(jsonStr);
         setGeneratedScenario(parsed);
-        setStep(3);
+        setStep(2);
       } else {
         throw new Error("Invalid JSON format");
       }
@@ -101,6 +90,11 @@ export default function ScenarioWizard() {
     if (!generatedScenario) return;
 
     try {
+      const activeSlot = getActiveDeckSlot();
+      const deckIds = getDeck(activeSlot);
+      const allData = await loadCharacterData();
+      const partyCards = allData.filter((c: any) => deckIds.includes(c.id));
+
       const scenarioData = {
         title: generatedScenario.title,
         genre: getGenreString(),
@@ -109,8 +103,8 @@ export default function ScenarioWizard() {
         scenarioSummary: generatedScenario.summary,
         scenarioSummaryEn: generatedScenario.summaryEn,
         introScene: generatedScenario.introScene,
-        partyId: selectedPartyId,
         sections: generatedScenario.sections,
+        party: partyCards,
       };
 
       await createNewScenario(scenarioData, generatedScenario.title);
@@ -128,7 +122,7 @@ export default function ScenarioWizard() {
       <header style={{ marginBottom: '24px' }}>
         <h1 className="text-display" style={{ fontSize: '2rem', marginBottom: '8px' }}>シナリオ作成ウィザード</h1>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {[0,1,2,3].map(i => (
+          {[0,1,2].map(i => (
             <div key={i} style={{ 
               height: '4px', 
               flex: 1, 
@@ -142,58 +136,8 @@ export default function ScenarioWizard() {
 
       <div className="glass-panel" style={{ flex: 1, padding: '32px', display: 'flex', flexDirection: 'column' }}>
         
-        {/* Step 0: Party */}
+        {/* Step 0: Genre */}
         {step === 0 && (
-          <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <h2 className="text-display" style={{ fontSize: '1.5rem', marginBottom: '16px' }}>ステップ 0：パーティを選択</h2>
-            <p className="text-secondary" style={{ marginBottom: '24px' }}>シナリオに挑戦するパーティを選択してください。</p>
-            
-            <div style={{ display: 'grid', gap: '12px', overflowY: 'auto', flex: 1, paddingRight: '8px' }}>
-              <div 
-                className={`btn ${selectedPartyId === 0 ? 'btn-primary' : 'btn-glass'}`}
-                style={{ justifyContent: 'flex-start', padding: '16px' }}
-                onClick={() => setSelectedPartyId(0)}
-              >
-                <Users style={{ marginRight: '16px' }} />
-                <span>パーティなし</span>
-              </div>
-              
-              <div 
-                className={`btn ${selectedPartyId === -1 ? 'btn-primary' : 'btn-glass'}`}
-                style={{ justifyContent: 'flex-start', padding: '16px' }}
-                onClick={() => setSelectedPartyId(-1)}
-              >
-                <Users style={{ marginRight: '16px' }} />
-                <span>あなたの分身のみ</span>
-              </div>
-
-              {parties.map(p => (
-                <div 
-                  key={p.partyId}
-                  className={`btn ${selectedPartyId === p.partyId ? 'btn-primary' : 'btn-glass'}`}
-                  style={{ justifyContent: 'flex-start', padding: '16px' }}
-                  onClick={() => setSelectedPartyId(p.partyId)}
-                >
-                  <Users style={{ marginRight: '16px' }} />
-                  <span>{p.name}</span>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button 
-                className="btn btn-primary" 
-                onClick={() => setStep(1)}
-                disabled={selectedPartyId === null}
-              >
-                次へ <ArrowRight size={18} style={{ marginLeft: '8px' }}/>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Step 1: Genre */}
-        {step === 1 && (
           <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
             <h2 className="text-display" style={{ fontSize: '1.5rem', marginBottom: '16px' }}>ステップ 1：ジャンルを選択</h2>
             
@@ -247,19 +191,16 @@ export default function ScenarioWizard() {
               </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '24px' }}>
-              <button className="btn btn-glass" onClick={() => setStep(0)}>
-                <ArrowLeft size={18} style={{ marginRight: '8px' }}/> 戻る
-              </button>
-              <button className="btn btn-primary" onClick={() => setStep(2)}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '24px' }}>
+              <button className="btn btn-primary" onClick={() => setStep(1)}>
                 次へ <ArrowRight size={18} style={{ marginLeft: '8px' }}/>
               </button>
             </div>
           </div>
         )}
 
-        {/* Step 2: Scenario Type */}
-        {step === 2 && (
+        {/* Step 1: Scenario Type */}
+        {step === 1 && (
           <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
             <h2 className="text-display" style={{ fontSize: '1.5rem', marginBottom: '16px' }}>ステップ 2：シナリオタイプを選択</h2>
             
@@ -294,7 +235,7 @@ export default function ScenarioWizard() {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '24px' }}>
-              <button className="btn btn-glass" onClick={() => setStep(1)} disabled={isGenerating}>
+              <button className="btn btn-glass" onClick={() => setStep(0)} disabled={isGenerating}>
                 <ArrowLeft size={18} style={{ marginRight: '8px' }}/> 戻る
               </button>
               <button 
@@ -306,11 +247,56 @@ export default function ScenarioWizard() {
                 {!isGenerating && <BookOpen size={18} style={{ marginLeft: '8px' }}/>}
               </button>
             </div>
+            
+            {/* ストリーミングプレビュー領域 */}
+            {isGenerating && streamText && (
+              <div className="animate-fade-in" style={{ 
+                marginTop: '24px', 
+                background: 'rgba(15, 17, 26, 0.9)', 
+                border: '1px solid rgba(74, 222, 128, 0.3)', 
+                borderRadius: '8px', 
+                padding: '16px',
+                position: 'relative',
+                overflow: 'hidden'
+              }}>
+                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: 'linear-gradient(90deg, transparent, #4ade80, transparent)', animation: 'scanline 2s linear infinite' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', color: '#4ade80' }}>
+                  <Sparkles size={16} className="pulse-animation" />
+                  <span style={{ fontSize: '0.8rem', letterSpacing: '2px' }}>AI IS BUILDING THE SCENARIO...</span>
+                </div>
+                <div style={{ 
+                  fontFamily: '"Courier New", Courier, monospace', 
+                  fontSize: '0.9rem', 
+                  color: '#a7f3d0', 
+                  lineHeight: '1.6',
+                  maxHeight: '150px',
+                  overflowY: 'auto',
+                  textShadow: '0 0 5px rgba(167, 243, 208, 0.5)'
+                }}>
+                  {cleanStreamText(streamText)}
+                  <span className="blink-cursor">_</span>
+                </div>
+              </div>
+            )}
+            
+            <style>{`
+              @keyframes scanline {
+                0% { transform: translateX(-100%); }
+                100% { transform: translateX(100%); }
+              }
+              .blink-cursor {
+                animation: blink 1s step-end infinite;
+              }
+              @keyframes blink {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0; }
+              }
+            `}</style>
           </div>
         )}
 
-        {/* Step 3: Confirmation */}
-        {step === 3 && generatedScenario && (
+        {/* Step 2: Confirmation */}
+        {step === 2 && generatedScenario && (
           <div className="animate-fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
             <h2 className="text-display" style={{ fontSize: '1.5rem', marginBottom: '8px' }}>ステップ 3：シナリオ確認</h2>
             <p className="text-secondary" style={{ marginBottom: '24px' }}>以下の内容でシナリオを開始します。</p>
@@ -356,7 +342,7 @@ export default function ScenarioWizard() {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '24px' }}>
-              <button className="btn btn-glass" onClick={() => setStep(2)}>
+              <button className="btn btn-glass" onClick={() => setStep(1)}>
                 <ArrowLeft size={18} style={{ marginRight: '8px' }}/> 作り直す
               </button>
               <button className="btn btn-primary" onClick={handleStartScenario} style={{ padding: '12px 32px' }}>

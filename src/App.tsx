@@ -10,8 +10,6 @@ import AppLayout from "./components/layout/AppLayout";
 import Dashboard from "./pages/Dashboard";
 import CharacterCreate from "./pages/CharacterCreate";
 import ScenarioWizard from "./pages/ScenarioWizard";
-import PartyList from "./pages/PartyList";
-import PartySetup from "./pages/PartySetup";
 import Bookshelf from "./pages/Bookshelf";
 import Settings from "./pages/Settings";
 import ScenarioPlay from "./pages/ScenarioPlay";
@@ -33,8 +31,6 @@ function App() {
             <Route path="/scenario" element={<ScenarioWizard />} />
             <Route path="/custom-scenario" element={<CustomScenario />} />
             <Route path="/tutorial" element={<TutorialList />} />
-            <Route path="/party" element={<PartyList />} />
-            <Route path="/party-setup/:partyId" element={<PartySetup />} />
             <Route path="/warehouse" element={<Warehouse />} />
             <Route path="/avatar" element={<AvatarEdit />} />
             <Route path="/bookshelf" element={<Bookshelf />} />

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useLLM } from '../hooks/useLLM';
+import { useLLM, cleanStreamText, extractJsonArray, extractJsonObject } from '../hooks/useLLM';
 import { Sparkles, X, Plus } from 'lucide-react';
 import { loadCharacterData, saveCharacterData } from '../lib/indexedDB';
 import { StabilityApiClient } from '../lib/stabilityApiClient';
@@ -21,6 +21,7 @@ interface CharacterCard {
 
 export default function CharacterCreate() {
   const { generateResponse, isGenerating } = useLLM();
+  const [streamText, setStreamText] = useState('');
   const { toast, alert } = useUI();
   const [stages, setStages] = useState(['ファンタジー', 'SF', '歴史・時代劇', '現代', 'ホラー / ダーク']);
   const [moods, setMoods] = useState(['ライト / ポップ', '中間 / バランス型', 'ダーク / シリアス']);
@@ -131,13 +132,22 @@ ${axisPrompt || '(指定なし)'}
 JSON配列出力:`;
 
     try {
-      const responseText = await generateResponse(prompt, []);
+      setStreamText('');
+      const responseText = await generateResponse(prompt, [], undefined, (chunk) => {
+        setStreamText(prev => prev + chunk);
+      });
       
-      const cleanedString = responseText.replace(/^```json\s*|```$/g, '').trim();
-      const jsonMatch = cleanedString.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+      const jsonArrStr = extractJsonArray(responseText);
+      const jsonObjStr = extractJsonObject(responseText);
       
-      if (jsonMatch && jsonMatch[0]) {
-        const parsed = JSON.parse(jsonMatch[0]);
+      let parsed = null;
+      if (jsonArrStr) {
+        parsed = JSON.parse(jsonArrStr);
+      } else if (jsonObjStr) {
+        parsed = [JSON.parse(jsonObjStr)];
+      }
+
+      if (parsed) {
         const cards = Array.isArray(parsed) ? parsed : [parsed];
         
         const newCards: CharacterCard[] = cards.map((item: any, idx: number) => {
@@ -269,11 +279,55 @@ JSON配列出力:`;
         )}
       </div>
 
-      {isGenerating && (
+      {isGenerating && streamText && (
+        <div className="animate-fade-in" style={{ 
+          marginBottom: '24px', 
+          background: 'rgba(15, 17, 26, 0.9)', 
+          border: '1px solid rgba(217, 70, 239, 0.3)', 
+          borderRadius: '8px', 
+          padding: '16px',
+          position: 'relative',
+          overflow: 'hidden'
+        }}>
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: 'linear-gradient(90deg, transparent, #d946ef, transparent)', animation: 'scanline 2s linear infinite' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', color: '#fbcfe8' }}>
+            <Sparkles size={16} className="pulse-animation" />
+            <span style={{ fontSize: '0.8rem', letterSpacing: '2px' }}>EXTRACTING ELEMENTS...</span>
+          </div>
+          <div style={{ 
+            fontFamily: '"Courier New", Courier, monospace', 
+            fontSize: '0.9rem', 
+            color: '#fbcfe8', 
+            lineHeight: '1.6',
+            maxHeight: '150px',
+            overflowY: 'auto',
+            textShadow: '0 0 5px rgba(217, 70, 239, 0.5)'
+          }}>
+            {cleanStreamText(streamText)}
+            <span className="blink-cursor">_</span>
+          </div>
+        </div>
+      )}
+
+      {isGenerating && !streamText && (
         <div className="glass-panel animate-pulse" style={{ padding: '24px', textAlign: 'center', marginBottom: '24px' }}>
           <p className="text-display">AIが要素を抽出しています...</p>
         </div>
       )}
+      
+      <style>{`
+        @keyframes scanline {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+        .blink-cursor {
+          animation: blink 1s step-end infinite;
+        }
+        @keyframes blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
+        }
+      `}</style>
 
       {/* Generated Cards Display */}
       <div style={{ 

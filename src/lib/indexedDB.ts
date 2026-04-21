@@ -211,6 +211,14 @@ export async function loadCharacterData() {
       modified.exp = c.exp || 0;
       modified.createdAt = c.createdAt || new Date().toISOString();
     }
+    
+    // パーティ機能の廃止に伴うマイグレーション
+    if (modified.group === 'Party') {
+      needsSave = true;
+      modified.group = 'Warehouse';
+      delete modified.partyId;
+    }
+
     if (modified.flipped === true) {
       needsSave = true;
       modified.flipped = false;
