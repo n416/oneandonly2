@@ -141,10 +141,15 @@ JSON配列出力:`;
       const jsonObjStr = extractJsonObject(responseText);
       
       let parsed = null;
-      if (jsonArrStr) {
-        parsed = JSON.parse(jsonArrStr);
-      } else if (jsonObjStr) {
-        parsed = [JSON.parse(jsonObjStr)];
+      try {
+        if (jsonArrStr) {
+          parsed = JSON.parse(jsonArrStr);
+        } else if (jsonObjStr) {
+          parsed = [JSON.parse(jsonObjStr)];
+        }
+      } catch (parseError) {
+        console.error("JSON Parse Error. Raw text was:", responseText);
+        throw new Error("AIが生成したデータの形式が不正です。もう一度お試しください。");
       }
 
       if (parsed) {

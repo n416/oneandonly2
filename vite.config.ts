@@ -1,29 +1,36 @@
-import { defineConfig } from "vite";
+import { defineConfig, PluginOption } from "vite";
 import react from "@vitejs/plugin-react";
+import { Buffer } from "node:buffer";
 
 // https://vite.dev/config/
-export default defineConfig(async () => ({
-  plugins: [react()],
-
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent Vite from obscuring rust errors
+export default defineConfig({
+  plugins: [
+    {
+      name: 'global-logger',
+      enforce: 'pre',
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          console.log(`[Vite Req] ${req.method} ${req.url}`);
+          next();
+        });
+      }
+    },
+    react()
+  ],
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
     strictPort: true,
     host: process.env.TAURI_DEV_HOST || false,
     hmr: process.env.TAURI_DEV_HOST
       ? {
-          protocol: "ws",
-          host: process.env.TAURI_DEV_HOST,
-          port: 1421,
-        }
+        protocol: "ws",
+        host: process.env.TAURI_DEV_HOST,
+        port: 1421,
+      }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
-    },
+    }
   },
-}));
+});

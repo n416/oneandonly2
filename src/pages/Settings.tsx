@@ -208,6 +208,7 @@ export default function Settings() {
             onChange={e => setConfig({ ...config, provider: e.target.value as Provider })}
           >
             <option value="gemini">Google Gemini 2.5 Flash (推奨・無料)</option>
+            <option value="cloudflare">Cloudflare Workers AI</option>
             <option value="ollama">Ollama (ローカル)</option>
             <option value="local">llm-api (高度なローカル)</option>
           </select>
@@ -369,6 +370,45 @@ export default function Settings() {
               onChange={e => setConfig({ ...config, ollamaModel: e.target.value })}
               placeholder={ollamaModels.length > 0 ? "またはモデル名を手動入力..." : "llama3, gemma, etc..."}
             />
+          </div>
+        )}
+
+        {config.provider === 'cloudflare' && (
+          <div className="fade-in glass-panel" style={{ padding: '16px', background: 'rgba(0,0,0,0.2)' }}>
+            <h3 style={{ fontSize: '1rem', marginBottom: '12px' }}>Cloudflare Workers AI 設定</h3>
+            
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Account ID</label>
+            <input 
+              type="text" 
+              className="btn btn-glass" 
+              style={{ width: '100%', textAlign: 'left', cursor: 'text', marginBottom: '16px' }}
+              value={config.cloudflareAccountId || ''}
+              onChange={e => setConfig({ ...config, cloudflareAccountId: e.target.value })}
+              placeholder="Cloudflare Account ID"
+            />
+            
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>API Token</label>
+            <input 
+              type="password" 
+              className="btn btn-glass" 
+              style={{ width: '100%', textAlign: 'left', cursor: 'text', marginBottom: '16px' }}
+              value={config.cloudflareApiToken || ''}
+              onChange={e => setConfig({ ...config, cloudflareApiToken: e.target.value })}
+              placeholder="API Token (Workers AI Read Access)"
+            />
+            
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>モデル</label>
+            <input 
+              type="text" 
+              className="btn btn-glass" 
+              style={{ width: '100%', textAlign: 'left', cursor: 'text' }}
+              value={config.cloudflareModel || ''}
+              onChange={e => setConfig({ ...config, cloudflareModel: e.target.value })}
+              placeholder="@cf/meta/llama-3.1-8b-instruct"
+            />
+            <p className="text-muted" style={{ fontSize: '0.85rem', marginTop: '8px' }}>
+              ※ 空欄の場合はデフォルトで <code>@cf/meta/llama-3.1-8b-instruct</code> が使用されます。
+            </p>
           </div>
         )}
 

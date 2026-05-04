@@ -37,17 +37,22 @@ export function extractJsonObject(text: string): string | null {
   return null;
 }
 
-// テキスト中から最初の有効なJSON配列([ ... ])を安全に抽出する
 export function extractJsonArray(text: string): string | null {
   const startIdx = text.indexOf('[');
+  if (startIdx === -1) return null;
+  
+  // 逆から探して一番最後の ] を見つける
   const endIdx = text.lastIndexOf(']');
-  if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
-    return text.substring(startIdx, endIdx + 1);
+  if (endIdx !== -1 && startIdx < endIdx) {
+    let extracted = text.substring(startIdx, endIdx + 1);
+    // Llama等がマークダウンを残すことがあるのでクリーンアップ
+    extracted = extracted.replace(/```json\n?/g, '').replace(/```/g, '');
+    return extracted;
   }
   return null;
 }
 
-export type Provider = 'gemini' | 'local' | 'ollama';
+export type Provider = 'gemini' | 'local' | 'ollama' | 'cloudflare';
 
 export interface LLMConfig {
   provider: Provider;
@@ -55,6 +60,9 @@ export interface LLMConfig {
   localEndpoint?: string; // Default to http://127.0.0.1:8000/api/chat-stream (local) or http://127.0.0.1:11434/api/chat (ollama)
   ollamaModel?: string;   // Ollama用モデル名
   localModelPath?: string; // Local(llm-api)用モデルパス
+  cloudflareAccountId?: string; // Cloudflare Workers AI用
+  cloudflareApiToken?: string;
+  cloudflareModel?: string;
 }
 
 export interface ChatMessage {
@@ -181,6 +189,78 @@ export function useLLM() {
                 }
               } catch (e) {
                 console.warn('Ollama chunk parse error', e);
+              }
+            }
+          }
+        }
+
+      } else if (config.provider === 'cloudflare') {
+        if (!config.cloudflareAccountId || !config.cloudflareApiToken) {
+          throw new Error('Cloudflare Account ID or API Token is missing');
+        }
+        const accountId = config.cloudflareAccountId.trim();
+        const apiToken = config.cloudflareApiToken.trim();
+        const model = (config.cloudflareModel || '@cf/meta/llama-3.1-8b-instruct').trim();
+
+        // 専用のNode.jsプロキシ(ポート1422)を使用します
+        const endpoint = `http://localhost:1422/ai-proxy/client/v4/accounts/${accountId}/ai/run/${model}`;
+        
+        const messagesPayload: any[] = [];
+        if (systemPrompt) {
+          messagesPayload.push({ role: 'system', content: systemPrompt });
+        }
+        history.forEach(h => {
+          messagesPayload.push({
+            role: h.role === 'user' ? 'user' : 'assistant',
+            content: h.parts[0].text
+          });
+        });
+
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiToken}`
+          },
+          body: JSON.stringify({ 
+            messages: messagesPayload,
+            stream: true,
+            max_tokens: 2048
+          })
+        });
+
+        if (!res.ok) {
+          throw new Error(`Cloudflare API error: ${res.status} ${await res.text()}`);
+        }
+
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            
+            let newlineIdx;
+            while ((newlineIdx = buffer.indexOf('\n')) >= 0) {
+              const line = buffer.slice(0, newlineIdx).trim();
+              buffer = buffer.slice(newlineIdx + 1);
+              
+              if (line.startsWith('data: ')) {
+                try {
+                  const dataStr = line.substring(6);
+                  if (dataStr === '[DONE]') continue;
+                  
+                  const json = JSON.parse(dataStr);
+                  if (json.response) {
+                    fullText += json.response;
+                    if (onChunk) onChunk(json.response);
+                  }
+                } catch (e) {
+                  console.warn("Cloudflare stream parse error:", e);
+                }
               }
             }
           }
