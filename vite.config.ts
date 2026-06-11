@@ -21,6 +21,13 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    proxy: {
+      '/cloudflare-api': {
+        target: 'https://api.cloudflare.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/cloudflare-api/, '')
+      }
+    },
     host: process.env.TAURI_DEV_HOST || false,
     hmr: process.env.TAURI_DEV_HOST
       ? {

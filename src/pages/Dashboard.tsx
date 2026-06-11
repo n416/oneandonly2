@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { UserPlus, Users, Archive, BookOpen, Library, Settings, Play } from 'lucide-react';
+import { UserPlus, Archive, BookOpen, Library, Settings, Play } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { listAllScenarios } from '../lib/indexedDB';
 

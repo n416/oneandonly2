@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Trash2, RotateCcw, XCircle, Download, Upload, Layers } from 'lucide-react';
+import { Trash2, RotateCcw, XCircle, Download, Upload } from 'lucide-react';
 import { loadCharacterData, saveCharacterData } from '../lib/indexedDB';
 import { getActiveDeckSlot, setActiveDeckSlot, getDeck, toggleCardInDeck, exportDecks, importDecks } from '../lib/deckManager';
 import Card, { CardData } from '../components/Card';

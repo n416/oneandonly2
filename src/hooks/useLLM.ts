@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
 // JSONの生テキストから不要なノイズ（括弧、キー、クォーテーション等）を除去し、
 // ストリーミング表示用のプレーンテキストを抽出するユーティリティ関数
@@ -29,22 +30,26 @@ export function cleanStreamText(rawText: string): string {
 
 // テキスト中から最初の有効なJSONオブジェクト({ ... })を安全に抽出する
 export function extractJsonObject(text: string): string | null {
-  const startIdx = text.indexOf('{');
-  const endIdx = text.lastIndexOf('}');
+  // 推論モデルの <think>...</think> タグが含まれている場合は除去する
+  const cleanText = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  const startIdx = cleanText.indexOf('{');
+  const endIdx = cleanText.lastIndexOf('}');
   if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
-    return text.substring(startIdx, endIdx + 1);
+    return cleanText.substring(startIdx, endIdx + 1);
   }
   return null;
 }
 
 export function extractJsonArray(text: string): string | null {
-  const startIdx = text.indexOf('[');
+  // 推論モデルの <think>...</think> タグが含まれている場合は除去する
+  const cleanText = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  const startIdx = cleanText.indexOf('[');
   if (startIdx === -1) return null;
   
   // 逆から探して一番最後の ] を見つける
-  const endIdx = text.lastIndexOf(']');
+  const endIdx = cleanText.lastIndexOf(']');
   if (endIdx !== -1 && startIdx < endIdx) {
-    let extracted = text.substring(startIdx, endIdx + 1);
+    let extracted = cleanText.substring(startIdx, endIdx + 1);
     // Llama等がマークダウンを残すことがあるのでクリーンアップ
     extracted = extracted.replace(/```json\n?/g, '').replace(/```/g, '');
     return extracted;
@@ -82,6 +87,10 @@ export function useLLM() {
     setIsGenerating(true);
     let fullText = '';
     
+    // Tauri環境かChrome等か判定して、fetchの実装を切り替え
+    const isTauri = '__TAURI_INTERNALS__' in window || '__TAURI_IPC__' in window;
+    const fetchApi = isTauri ? tauriFetch : window.fetch;
+    
     // configOverrideがなければ localStorage から取得、なければデフォルト設定
     let config = configOverride;
     if (!config) {
@@ -101,6 +110,7 @@ export function useLLM() {
     try {
       if (config.provider === 'local') {
         const endpoint = config.localEndpoint || 'http://127.0.0.1:8000/api/chat-stream';
+        const localFetch = window.fetch; // use native fetch for local to avoid Tauri IPC streaming bugs
         
         // GGUFモデル用にプロンプトを文字列に平坦化する
         const messageText = history.map(h => `${h.role === 'user' ? 'User' : 'Assistant'}: ${h.parts[0].text}`).join('\n') + '\nAssistant:';
@@ -118,7 +128,7 @@ export function useLLM() {
           });
         });
 
-        const res = await fetch(endpoint, {
+        const res = await localFetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
@@ -158,7 +168,7 @@ export function useLLM() {
           });
         });
 
-        const res = await fetch(endpoint, {
+        const res = await fetchApi(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
@@ -202,8 +212,10 @@ export function useLLM() {
         const apiToken = config.cloudflareApiToken.trim();
         const model = (config.cloudflareModel || '@cf/meta/llama-3.1-8b-instruct').trim();
 
-        // 専用のNode.jsプロキシ(ポート1422)を使用します
-        const endpoint = `http://localhost:1422/ai-proxy/client/v4/accounts/${accountId}/ai/run/${model}`;
+        // Tauri環境なら直接APIへ、ブラウザならCORS回避用のローカルプロキシ(1422番ポート)を経由
+        const endpoint = isTauri
+          ? `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`
+          : `http://localhost:1422/ai-proxy/client/v4/accounts/${accountId}/ai/run/${model}`;
         
         const messagesPayload: any[] = [];
         if (systemPrompt) {
@@ -216,7 +228,7 @@ export function useLLM() {
           });
         });
 
-        const res = await fetch(endpoint, {
+        const res = await fetchApi(endpoint, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -285,7 +297,7 @@ export function useLLM() {
           bodyData.systemInstruction = { parts: [{ text: systemPrompt }] };
         }
 
-        const res = await fetch(endpoint, {
+        const res = await fetchApi(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(bodyData),

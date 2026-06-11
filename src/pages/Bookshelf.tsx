@@ -187,7 +187,7 @@ export default function Bookshelf() {
           title="シナリオZIPをインポート"
         >
           <Upload size={18} />
-          <span style={{ marginLeft: '8px', display: 'none', '@media (min-width: 768px)': { display: 'inline' } } as any}>インポート</span>
+          <span className="hide-on-mobile" style={{ marginLeft: '8px' }}>インポート</span>
         </button>
         <input 
           type="file" 

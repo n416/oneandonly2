@@ -20,6 +20,8 @@ export default function Settings() {
   const [loadErrorMsg, setLoadErrorMsg] = useState('');
   const [serverModels, setServerModels] = useState<{name: string, path: string, type: string}[]>([]);
   const [ollamaModels, setOllamaModels] = useState<{name: string}[]>([]);
+  const [vramInfo, setVramInfo] = useState<any>(null);
+  const [gpuLayers, setGpuLayers] = useState<number | undefined>(undefined);
   
   const [showDirViewer, setShowDirViewer] = useState(false);
   const [dirViewerMode, setDirViewerMode] = useState<'gguf'|'folder'>('gguf');
@@ -53,6 +55,8 @@ export default function Settings() {
             setLocalApiStatus(data.status || 'unloaded');
             setLoadedModelPath(data.model_path || '');
             setLoadErrorMsg(data.error_msg || '');
+            setVramInfo(data.vram || null);
+            setGpuLayers(data.gpu_layers);
           }
           
           if (isSubscribed && serverModels.length === 0) {
@@ -127,6 +131,21 @@ export default function Settings() {
     } catch (e: any) {
       console.error(e);
       toast('ロードリクエストに失敗: ' + e.message, 'error');
+      setLocalApiStatus('offline');
+    }
+  };
+
+  const handleUnloadModel = async () => {
+    try {
+      const baseUrl = config.localEndpoint?.replace('/api/chat-stream', '') || 'http://127.0.0.1:8000';
+      const res = await fetch(`${baseUrl}/api/unload-model`, { method: 'POST' });
+      if (!res.ok) throw new Error(await res.text());
+      toast('モデルをアンロードしました。', 'success');
+      setLocalApiStatus('unloaded');
+      setLoadedModelPath('');
+    } catch (e: any) {
+      console.error(e);
+      toast('アンロードに失敗: ' + e.message, 'error');
     }
   };
 
@@ -251,9 +270,9 @@ export default function Settings() {
           <div className="fade-in glass-panel" style={{ padding: '16px', background: 'rgba(0,0,0,0.2)' }}>
             <h3 style={{ fontSize: '1rem', marginBottom: '12px' }}>llm-api 設定</h3>
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>エンドポイント</label>
-            <input 
-              type="text" 
-              className="btn btn-glass" 
+            <input
+              type="text"
+              className="btn btn-glass"
               style={{ width: '100%', textAlign: 'left', cursor: 'text', marginBottom: '16px' }}
               value={config.localEndpoint || 'http://127.0.0.1:8000/api/chat-stream'}
               onChange={e => setConfig({ ...config, localEndpoint: e.target.value })}
@@ -266,16 +285,88 @@ export default function Settings() {
               </div>
             ) : (
               <>
+                {/* ステータス表示 */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                  <span style={{ 
+                  <span style={{
                     display: 'inline-block', width: 10, height: 10, borderRadius: '50%',
-                    backgroundColor: localApiStatus === 'ready' ? '#10b981' : localApiStatus === 'loading' ? '#f59e0b' : localApiStatus === 'error' ? '#ef4444' : '#6b7280'
+                    backgroundColor:
+                      localApiStatus === 'ready' ? '#10b981' :
+                      localApiStatus === 'loading' ? '#f59e0b' :
+                      localApiStatus === 'error' ? '#ef4444' : '#6b7280'
                   }} />
                   <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>
                     状態: {localApiStatus.toUpperCase()}
                   </span>
                   {localApiStatus === 'loading' && <RefreshCw size={16} className="spin" />}
                 </div>
+
+                {/* VRAM情報 */}
+                {vramInfo && vramInfo.available && (
+                  <div className="glass-panel" style={{ padding: '12px', marginBottom: '16px', background: 'rgba(0,0,0,0.3)' }}>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '8px', color: 'var(--text-secondary)' }}>
+                      GPU / VRAM
+                    </div>
+                    <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                      {vramInfo.type === 'cuda' ? (
+                        <>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>使用中</span>
+                            <span style={{ fontSize: '1rem', fontWeight: 700, color: '#f59e0b' }}>
+                              {vramInfo.used_gb} GB
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>空き</span>
+                            <span style={{ fontSize: '1rem', fontWeight: 700, color: '#10b981' }}>
+                              {vramInfo.free_gb} GB
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>合計</span>
+                            <span style={{ fontSize: '1rem', fontWeight: 700 }}>
+                              {vramInfo.total_gb} GB
+                            </span>
+                          </div>
+                          {/* VRAMバー */}
+                          <div style={{ width: '100%', marginTop: '4px' }}>
+                            <div style={{
+                              height: '6px', borderRadius: '3px',
+                              background: 'rgba(255,255,255,0.1)',
+                              overflow: 'hidden'
+                            }}>
+                              <div style={{
+                                height: '100%',
+                                width: `${Math.round((vramInfo.used_gb / vramInfo.total_gb) * 100)}%`,
+                                background: vramInfo.used_gb / vramInfo.total_gb > 0.8
+                                  ? '#ef4444'
+                                  : vramInfo.used_gb / vramInfo.total_gb > 0.6
+                                  ? '#f59e0b'
+                                  : '#10b981',
+                                borderRadius: '3px',
+                                transition: 'width 0.5s ease'
+                              }} />
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <span style={{ fontSize: '0.9rem', color: '#a78bfa' }}>Apple Silicon (MPS)</span>
+                      )}
+                    </div>
+
+                    {/* GPUレイヤー数 */}
+                    {gpuLayers !== undefined && localApiStatus === 'ready' && (
+                      <div style={{ marginTop: '8px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        GPUレイヤー: {gpuLayers === -1 ? '全レイヤー (フルGPU)' : gpuLayers === 0 ? 'なし (CPU only)' : `${gpuLayers} レイヤー`}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {vramInfo && !vramInfo.available && (
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                    GPU未検出 (CPU動作中)
+                  </div>
+                )}
 
                 {loadedModelPath && (
                   <div className="text-muted" style={{ fontSize: '0.8rem', marginBottom: '16px', wordBreak: 'break-all' }}>
@@ -289,7 +380,7 @@ export default function Settings() {
                 )}
 
                 <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>モデルを選択してロード</label>
-                
+
                 {serverModels.length > 0 && (
                   <select
                     className="btn btn-glass"
@@ -306,30 +397,40 @@ export default function Settings() {
 
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                   <button className="btn btn-glass" style={{ flex: 1, padding: '8px', fontSize: '0.9rem' }} onClick={() => handleSelectModel('gguf')}>
-                    <File size={16} style={{ marginRight: '8px' }}/> PCからGGUF
+                    <File size={16} style={{ marginRight: '8px' }} /> PCからGGUF
                   </button>
                   <button className="btn btn-glass" style={{ flex: 1, padding: '8px', fontSize: '0.9rem' }} onClick={() => handleSelectModel('folder')}>
-                    <FolderOpen size={16} style={{ marginRight: '8px' }}/> PCからフォルダ
+                    <FolderOpen size={16} style={{ marginRight: '8px' }} /> PCからフォルダ
                   </button>
                 </div>
-                
-                <input 
-                  type="text" 
-                  className="btn btn-glass" 
+
+                <input
+                  type="text"
+                  className="btn btn-glass"
                   style={{ width: '100%', textAlign: 'left', cursor: 'text', marginBottom: '8px' }}
                   value={config.localModelPath || ''}
                   onChange={e => setConfig({ ...config, localModelPath: e.target.value })}
                   placeholder={serverModels.length > 0 ? "またはフルパスを手動入力..." : "モデルのパスを手動入力..."}
                 />
 
-                <button 
-                  className="btn btn-primary" 
-                  style={{ width: '100%', marginTop: '8px' }}
-                  onClick={handleLoadModel}
-                  disabled={localApiStatus === 'loading'}
-                >
-                  <RefreshCw size={16} style={{ marginRight: '8px' }}/> サーバーへロード
-                </button>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                  <button
+                    className="btn btn-primary"
+                    style={{ flex: 1 }}
+                    onClick={handleLoadModel}
+                    disabled={localApiStatus === 'loading'}
+                  >
+                    <RefreshCw size={16} style={{ marginRight: '8px' }} /> ロード
+                  </button>
+                  <button
+                    className="btn btn-glass"
+                    style={{ flex: 1, color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.3)' }}
+                    onClick={handleUnloadModel}
+                    disabled={localApiStatus === 'unloaded' || localApiStatus === 'loading'}
+                  >
+                    アンロード (VRAM解放)
+                  </button>
+                </div>
               </>
             )}
           </div>

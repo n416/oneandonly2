@@ -39,6 +39,7 @@ export default function ScenarioPlay() {
   const { scenarioId } = useParams<{ scenarioId: string }>();
   const navigate = useNavigate();
   const { generateResponse, isGenerating } = useLLM();
+  const { generateResponse: generateBgResponse } = useLLM();
   const [streamText, setStreamText] = useState('');
 
   const [scenario, setScenario] = useState<any>(null);
@@ -90,11 +91,8 @@ export default function ScenarioPlay() {
       // 初回のみ（履歴が0件の場合）オープニングを生成
       if (scenes.length === 0 && !hasStartedOpening) {
         setHasStartedOpening(true);
-        // handleNextScene は状態に依存するため、非同期で少し待つか、
-        // あるいは独立した初期化用関数を呼ぶ方が良いが、
-        // ここでは state の更新がキューに入った後、直接呼び出す
         setTimeout(() => {
-          handleNextScene('（ゲーム開始。シナリオの魅力的なオープニングシーンから描写をスタートしてください。）', true);
+          handleNextScene('（ゲーム開始。シナリオの魅力的なオープニングシーンから描写をスタートしてください。）', true, sc);
         }, 100);
       }
     };
@@ -175,11 +173,12 @@ export default function ScenarioPlay() {
     historyEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [sceneHistory, isGenerating]);
 
-  const handleNextScene = async (overrideInput?: string, isOpening: boolean = false) => {
+  const handleNextScene = async (overrideInput?: string, isOpening: boolean = false, overrideScenario?: any) => {
     const input = overrideInput || playerInput;
-    if (!input.trim() || !scenario || isGenerating) return;
+    const targetScenario = overrideScenario || scenario;
+    if (!input.trim() || !targetScenario || isGenerating) return;
 
-    const wd = scenario.wizardData || {};
+    const wd = targetScenario.wizardData || {};
     const sections = wd.sections || [];
 
     let systemText = `あなたは経験豊富なTRPGゲームマスター(GM)です。以下のルールに従い、プレイヤーの行動に対する次のシーンを生成してください。
@@ -273,7 +272,7 @@ export default function ScenarioPlay() {
       setSceneHistory(prev => [...prev, newEntry]);
 
       // シナリオの更新日時を更新
-      const updatedScenario = { ...scenario, updatedAt: new Date().toISOString() };
+      const updatedScenario = { ...targetScenario, updatedAt: new Date().toISOString() };
       await updateScenario(updatedScenario);
       setScenario(updatedScenario);
 
@@ -322,7 +321,7 @@ ${sceneTextJa || '(シーンなし)'}
 
 質問: この達成条件は満たされましたか？ (YES/NO)`;
 
-      const answer = (await generateResponse(prompt, []))?.trim().toUpperCase() || '';
+      const answer = (await generateBgResponse(prompt, []))?.trim().toUpperCase() || '';
       
       if (answer.startsWith('YES')) {
         firstUncleared.cleared = true;
@@ -360,7 +359,7 @@ ${sceneTextJa || '(シーンなし)'}
         
         const prompt = `以下のゲーム進行テキストを日本語で5行程度に要約してください。重要な出来事や結果に焦点を当ててください:\n---\n${gatheredTextJa}\n---\n要約:`;
         try {
-          const summary = await generateResponse(prompt, []);
+          const summary = await generateBgResponse(prompt, []);
           await addSceneSummaryRecord({ chunkIndex, content_ja: summary.trim() });
         } catch (e) {
           console.error('Summary generation failed', e);
@@ -384,7 +383,7 @@ ${sceneTextJa || '(シーンなし)'}
 
       const prompt = `あなたはTRPGの情報を整理するAIです。以下のシナリオテキスト全体を読み、物語に登場した重要な【アイテム】や【キャラクター】(モンスター含む)を抽出してください。既に抽出済みのリストも参考に、重複を避け、新たに見つかったものだけをリストアップしてください。\n\n抽出済リスト:\n${existingDesc}\n\nシナリオテキスト:\n---\n${scenarioText}\n---\n\n出力形式は以下のJSON配列形式のみとしてください。説明や前置きは不要です。日本語で記述し、固有名詞が英語の場合はカタカナにしてください。プレイヤーが入手したと思われるアイテムには "acquired": true を設定してください。\n例: [{"category":"item","name":"古い鍵","description":"錆びついた銅製の鍵。","acquired":true}, {"category":"character","name":"ゴブリン","description":"小柄で緑色の肌を持つモンスター。","acquired":false}]\n\n新たに見つかったエンティティリスト(JSON配列):`;
       
-      const response = await generateResponse(prompt, []);
+      const response = await generateBgResponse(prompt, []);
       const jsonArrStr = extractJsonArray(response);
       if (jsonArrStr) {
         const newEntities = JSON.parse(jsonArrStr);
@@ -426,7 +425,7 @@ ${sceneTextJa || '(シーンなし)'}
   };
 
   const handleGenerateEntityImage = async (entity: any) => {
-    const promptEn = await generateResponse(`あなたは翻訳者です。次のテキストを画像生成用のカンマ区切りの英語プロンプトに翻訳してください。文章ではなく英単語の羅列で出力してください。\n${entity.name}: ${entity.description}`, []);
+    const promptEn = await generateBgResponse(`あなたは翻訳者です。次のテキストを画像生成用のカンマ区切りの英語プロンプトに翻訳してください。文章ではなく英単語の羅列で出力してください。\n${entity.name}: ${entity.description}`, []);
     const prompt = `high quality, masterpiece, concept art, solo, ${promptEn.trim()}`;
     try {
       const apiKey = localStorage.getItem('stabilityApiKey');
@@ -588,7 +587,7 @@ ${sectionText}
 ---
 ${lastScene.content}`;
       
-      const promptEn = await generateResponse(prompt, []);
+      const promptEn = await generateBgResponse(prompt, []);
       const finalPrompt = 'cinematic, beautiful, highly detailed, scenery, background, ' + promptEn.trim();
 
       toast("背景画像を生成中...", "info");
@@ -669,7 +668,7 @@ ${itemsText}
   ]
 }`;
 
-      const response = await generateResponse(prompt, []);
+      const response = await generateBgResponse(prompt, []);
       const jsonObjStr = extractJsonObject(response);
       if (jsonObjStr) {
         const parsed = JSON.parse(jsonObjStr);
