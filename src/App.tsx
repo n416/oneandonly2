@@ -1,7 +1,10 @@
+import React from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { UIProvider } from "./contexts/UIContext";
 import { TutorialProvider } from "./lib/TutorialContext";
 import TutorialOverlay from "./components/TutorialOverlay";
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
 // Layouts
 import AppLayout from "./components/layout/AppLayout";
@@ -19,6 +22,31 @@ import CustomScenario from "./pages/CustomScenario";
 import TutorialList from "./pages/TutorialList";
 
 function App() {
+  React.useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    
+    const setupCloseListener = async () => {
+      try {
+        const appWindow = getCurrentWindow();
+        unlisten = await appWindow.onCloseRequested(async () => {
+          try {
+            // Attempt to cleanly shutdown the python sidecar if running
+            await tauriFetch('http://127.0.0.1:8000/api/shutdown', { method: 'POST' });
+          } catch (e) {
+            // Ignore errors if server is already dead or not running locally
+          }
+        });
+      } catch (e) {
+        console.warn("Could not attach window close listener", e);
+      }
+    };
+    
+    setupCloseListener();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   return (
     <UIProvider>
       <Router>

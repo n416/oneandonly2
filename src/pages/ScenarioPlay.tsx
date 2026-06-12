@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Send, Trash2, Edit2, Check, X, Briefcase, Lightbulb } from 'lucide-react';
+import { ArrowLeft, Send, Trash2, Edit2, Check, X, Briefcase, Lightbulb, Dices } from 'lucide-react';
 import pako from 'pako';
 import { 
   getScenarioById, getSceneEntriesByScenarioId, addSceneEntry, updateScenario, updateSceneEntry, deleteSceneEntry,
@@ -10,6 +10,18 @@ import {
 import { useLLM, cleanStreamText, extractJsonArray, extractJsonObject } from '../hooks/useLLM';
 import { useUI } from '../contexts/UIContext';
 import { StabilityApiClient } from '../lib/stabilityApiClient';
+import { ActionChoice, RollResult, rollCheck, calcModifier } from '../lib/diceSystem';
+import DiceRoll from '../components/DiceRoll';
+import { memo } from 'react';
+
+const MemoizedSceneContent = memo(({ content }: { content: string }) => {
+  return (
+    <div 
+      dangerouslySetInnerHTML={{ __html: content }} 
+      style={{ lineHeight: 1.6, whiteSpace: 'pre-wrap', outline: 'none' }} 
+    />
+  );
+});
 
 interface SceneEntry {
   entryId?: number;
@@ -20,6 +32,8 @@ interface SceneEntry {
   content_en?: string;
   actionContent?: string;
   actionContent_en?: string;
+  rollResult?: { dice: [number, number]; modifier: number; total: number; outcome: string; choiceText: string };
+  choices?: ActionChoice[];
 }
 
 function decompressCondition(zippedBase64?: string): string {
@@ -55,9 +69,15 @@ export default function ScenarioPlay() {
   const [editTempText, setEditTempText] = useState('');
   const [editingType, setEditingType] = useState<'action' | 'content' | null>(null);
 
-  const [suggestedChoices, setSuggestedChoices] = useState<string[]>([]);
   const [isGeneratingChoices, setIsGeneratingChoices] = useState(false);
-  const [pendingPlayerAction, setPendingPlayerAction] = useState<string | null>(null);
+  const [pendingPlayerAction, setPendingPlayerAction] = useState<{ text: string, rollResult?: RollResult } | null>(null);
+
+  const [autoChoices, setAutoChoices] = useState<ActionChoice[]>([]);
+  const [pendingDiceRoll, setPendingDiceRoll] = useState<{ result: RollResult; choice?: ActionChoice, isFreeRoll?: boolean } | null>(null);
+  const [freeRolls, setFreeRolls] = useState<{ id: string, total: number, outcome: string, time: string }[]>([]);
+  const [showFreeInput, setShowFreeInput] = useState(() => {
+    return localStorage.getItem('oneandonly_show_free_input') === 'true';
+  });
 
   // アイテム関連
   const [acquiredItems, setAcquiredItems] = useState<any[]>([]);
@@ -87,6 +107,13 @@ export default function ScenarioPlay() {
       const entries = await getSceneEntriesByScenarioId(Number(scenarioId));
       const scenes = entries.filter((e: any) => e.type === 'scene');
       setSceneHistory(scenes);
+
+      if (scenes.length > 0) {
+        const lastEntry = scenes[scenes.length - 1];
+        if (lastEntry.choices && lastEntry.choices.length > 0) {
+          setAutoChoices(lastEntry.choices);
+        }
+      }
 
       // 初回のみ（履歴が0件の場合）オープニングを生成
       if (scenes.length === 0 && !hasStartedOpening) {
@@ -186,12 +213,24 @@ export default function ScenarioPlay() {
 - 背景黒が前提の、読みやすい文字のHTML的な装飾をする。style直書きで良い。
 - 出力は必ず日本語。
 - シナリオ設定と過去の展開との整合性を保つ。
+- 【重要】直前のシーンの描写やこれまでのあらすじを一切繰り返さないこと（オウム返し禁止）。プレイヤーの行動に対する「直後の結果」から直接新たな描写をスタートさせること。
 - プレイヤーの行動の結果を具体的に描写する。
 - 新たな状況や登場人物、選択肢を提示し、物語を進展させる。
 - 時々パーティメンバーの短い会話や反応を含める。
 - メタ的な発言(GMとしての説明など)はしない。
-- 最後の文節はプレイヤーに次の行動を促す問いかけで終わることが望ましいが、選択肢は不要。
-- 必要に応じて【セクション目標】の達成に繋がるヒントを自然に含める。
+- 最後の文節はプレイヤーに次の行動を促す問いかけで終わること。
+- **必ず文章の一番最後に、以下の形式でマークダウンのJSONコードブロック（${"```"}json）を出力し、選択肢を4つ提供してください。**
+${"```"}json
+{
+  "choices": [
+    {"text": "選択肢1のテキスト", "approach": "力技", "risky": true},
+    {"text": "選択肢2のテキスト", "approach": "知恵", "risky": false},
+    {"text": "選択肢3のテキスト", "approach": "直感", "risky": false},
+    {"text": "選択肢4のテキスト", "approach": "魅力", "risky": true}
+  ]
+}
+${"```"}
+- GMは「判定結果」が与えられた場合、それを覆してはならない。
 ======
 `;
 
@@ -240,14 +279,28 @@ export default function ScenarioPlay() {
     if (!isOpening && selectedItem && finalInput) {
       finalInput = `【アイテム「${selectedItem.name}」を使用】${finalInput}`;
     }
+
+    const rollResult = overrideScenario?.rollResult;
+    if (rollResult) {
+      if (rollResult.outcome === 'success') {
+        finalInput = `プレイヤーは「${finalInput}」を試み、見事に成功した。成功の結果を肯定的に描写せよ。`;
+      } else if (rollResult.outcome === 'partial') {
+        finalInput = `プレイヤーは「${finalInput}」を試み、目的は達成したが代償や予期せぬ問題が発生した。何かを失う・状況が複雑化する等、具体的な代償を必ず1つ描写せよ。`;
+      } else if (rollResult.outcome === 'failure') {
+        finalInput = `プレイヤーは「${finalInput}」を試みたが失敗した。失敗の結果として状況を悪化させる新たな展開を描写せよ。ただし即死や物語の完全な行き詰まりにはしないこと。`;
+      }
+    }
+
     prompt += `プレイヤー: ${finalInput}\n`;
     prompt += '--- 次のシーン ---\nGM:';
 
-    const actionTextJa = isOpening ? '' : finalInput;
+    const actionTextJa = isOpening ? '' : input.trim(); // 履歴の表示用には元のテキストを残す
     if (!isOpening) {
       setPlayerInput('');
       setSelectedItem(null);
-      setPendingPlayerAction(actionTextJa);
+      
+      const rollResult = overrideScenario?.rollResult;
+      setPendingPlayerAction({ text: actionTextJa, rollResult });
     }
 
     try {
@@ -257,14 +310,67 @@ export default function ScenarioPlay() {
       });
       if (!result) throw new Error('APIから応答がありません');
 
+      let jsonObjStr: string | null = null;
+      // マークダウンブロックからの抽出を最優先
+      const jsonBlockMatch = result.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+      if (jsonBlockMatch) {
+        jsonObjStr = jsonBlockMatch[1];
+      } else {
+        const choicesIdx = result.indexOf('"choices"');
+        if (choicesIdx !== -1) {
+          const startIdx = result.lastIndexOf('{', choicesIdx);
+          const endIdx = result.lastIndexOf('}');
+          if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
+            jsonObjStr = result.substring(startIdx, endIdx + 1);
+          }
+        }
+      }
+      if (!jsonObjStr) jsonObjStr = extractJsonObject(result);
+      
+      let choices: ActionChoice[] = [];
+      let finalContent = result;
+      if (jsonObjStr) {
+        // パース成否に関わらず文字列を削除し、マークダウンのゴミも消す
+        finalContent = result.replace(jsonObjStr, '').replace(/```json\n?/g, '').replace(/```/g, '').trim();
+        try {
+          const parsed = JSON.parse(jsonObjStr);
+          if (parsed.choices && Array.isArray(parsed.choices)) {
+            choices = parsed.choices;
+          }
+        } catch (e) {
+          console.error("Failed to parse choices JSON", e);
+        }
+      }
+      
+      // <think>タグの処理と、テキストが空になった場合のフォールバック
+      finalContent = finalContent.replace(/<think>([\s\S]*?)<\/think>/g, '<details><summary>GMの思考プロセス (クリックで開閉)</summary>\n$1\n</details>');
+      // 【JSON】などの不要なプレースホルダーが残っていれば消す
+      finalContent = finalContent.replace(/【JSON】/g, '').trim();
+      
+      const textWithoutThink = finalContent.replace(/<details>[\s\S]*?<\/details>/g, '').trim();
+      if (!textWithoutThink && result.length > 0) {
+        finalContent += '\n(※応答の生成が完了しました。システムによって処理されました)';
+      }
+
       const sceneIdHash = `scene_${Date.now()}`;
       const newEntry: SceneEntry = {
         scenarioId: Number(scenarioId),
         type: 'scene',
         sceneId: sceneIdHash,
-        content: result,
+        content: finalContent,
         actionContent: actionTextJa,
+        choices: choices,
       };
+
+      if (rollResult) {
+        newEntry.rollResult = {
+          dice: rollResult.dice,
+          modifier: rollResult.modifier,
+          total: rollResult.total,
+          outcome: rollResult.outcome,
+          choiceText: actionTextJa
+        };
+      }
 
       const entryId = await addSceneEntry(newEntry);
       newEntry.entryId = entryId;
@@ -277,13 +383,15 @@ export default function ScenarioPlay() {
       setScenario(updatedScenario);
 
       // セクションクリア判定を非同期で実行
-      checkSectionClearAsync(updatedScenario, actionTextJa, result);
+      if (!isOpening && actionTextJa.trim()) {
+        checkSectionClearAsync(updatedScenario, actionTextJa, finalContent);
+      }
 
       // 要約の生成を非同期で実行
       handleSceneSummaries([...sceneHistory, newEntry]);
       
       // 次のシーンが生成されたら以前の選択肢はクリアする
-      setSuggestedChoices([]);
+      setAutoChoices(choices);
       setPendingPlayerAction(null);
 
     } catch (e: any) {
@@ -617,7 +725,7 @@ ${lastScene.content}`;
   const handleSuggestActions = async () => {
     if (sceneHistory.length === 0 || isGeneratingChoices) return;
     setIsGeneratingChoices(true);
-    setSuggestedChoices([]);
+    setAutoChoices([]);
     try {
       const lastScene = sceneHistory[sceneHistory.length - 1];
       const wd = scenario.wizardData || {};
@@ -656,30 +764,59 @@ ${itemsText}
 - 各選択肢は具体的で、プレイヤーが実際に行動できる内容にしてください。
 - 多様性を意識し、探索、対話、戦闘準備、回避、あるいは少し意外な行動など、異なる方向性の選択肢を含めてください。
 - もし「持ち物」がある場合、そのアイテムを活用した選択肢を少なくとも1つ含めてください。
-- **必ず以下のJSON形式で、選択肢テキストの配列のみを出力してください。JSON以外の前置き、後書き、説明などは一切含めないでください。**
+- **必ず以下の形式で、マークダウンのJSONコードブロック（${"```"}json）として選択肢のみを出力してください。本文や説明は一切不要です。**
 
-出力形式 (JSON):
+${"```"}json
 {
-  "options": [
-    "選択肢のテキスト1",
-    "選択肢のテキスト2",
-    "選択肢のテキスト3",
-    "選択肢のテキスト4"
+  "choices": [
+    {"text": "選択肢1のテキスト", "approach": "力技", "risky": true},
+    {"text": "選択肢2のテキスト", "approach": "知恵", "risky": false},
+    {"text": "選択肢3のテキスト", "approach": "直感", "risky": false},
+    {"text": "選択肢4のテキスト", "approach": "魅力", "risky": true}
   ]
-}`;
+}
+${"```"}
+`;
 
       const response = await generateBgResponse(prompt, []);
-      const jsonObjStr = extractJsonObject(response);
-      if (jsonObjStr) {
-        const parsed = JSON.parse(jsonObjStr);
-        if (parsed.options && Array.isArray(parsed.options)) {
-          // Fisher-Yates Shuffle
-          const shuffled = [...parsed.options];
-          for (let i = shuffled.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      let jsonObjStr: string | null = null;
+      const jsonBlockMatch = response.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+      if (jsonBlockMatch) {
+        jsonObjStr = jsonBlockMatch[1];
+      } else {
+        const choicesIdx = response.indexOf('"choices"');
+        if (choicesIdx !== -1) {
+          const startIdx = response.lastIndexOf('{', choicesIdx);
+          const endIdx = response.lastIndexOf('}');
+          if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
+            jsonObjStr = response.substring(startIdx, endIdx + 1);
           }
-          setSuggestedChoices(shuffled);
+        }
+      }
+      if (!jsonObjStr) jsonObjStr = extractJsonObject(response);
+      
+      if (jsonObjStr) {
+        try {
+          const parsed = JSON.parse(jsonObjStr);
+          if (parsed.choices && Array.isArray(parsed.choices)) {
+            // Fisher-Yates Shuffle
+            const shuffled = [...parsed.choices];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
+            setAutoChoices(shuffled);
+            
+            if (sceneHistory.length > 0) {
+              const lastEntry = sceneHistory[sceneHistory.length - 1];
+              lastEntry.choices = shuffled;
+              updateSceneEntry(lastEntry).catch(console.error);
+              setSceneHistory([...sceneHistory]);
+            }
+          }
+        } catch (e) {
+          console.error("Failed to parse suggest options", e);
+          toast('選択肢の解析に失敗しました。', 'error');
         }
       } else {
         toast('選択肢の解析に失敗しました。', 'error');
@@ -690,6 +827,23 @@ ${itemsText}
     } finally {
       setIsGeneratingChoices(false);
     }
+  };
+
+  const handleChoiceSelect = (choice: ActionChoice) => {
+    if (isGenerating) return;
+    if (choice.risky) {
+      const deckCards = scenario.wizardData?.party || [];
+      const { value } = calcModifier(choice, deckCards);
+      const result = rollCheck(value);
+      setPendingDiceRoll({ choice, result });
+    } else {
+      handleNextScene(choice.text);
+    }
+  };
+
+  const handleFreeRoll = () => {
+    const result = rollCheck(0);
+    setPendingDiceRoll({ result, isFreeRoll: true });
   };
 
   if (!scenario) return <div style={{ padding: '24px' }}>読込中...</div>;
@@ -717,6 +871,13 @@ ${itemsText}
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
+          <button 
+            className="btn btn-glass" 
+            onClick={handleFreeRoll} 
+            title="フリーダイス (意味もなく振る)"
+          >
+            <Dices size={20} />
+          </button>
           <button 
             className="btn btn-glass" 
             onClick={handleGenerateBackground} 
@@ -782,6 +943,18 @@ ${itemsText}
                 ) : (
                   <div style={{ whiteSpace: 'pre-wrap', outline: 'none' }}>
                     {scn.actionContent}
+                    {scn.rollResult && (
+                      <div style={{ 
+                        marginTop: '8px', padding: '6px 12px', background: 'rgba(0,0,0,0.3)', borderRadius: '8px',
+                        display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', width: 'fit-content'
+                      }}>
+                        <Dices size={16} color={scn.rollResult.outcome === 'success' ? '#4ade80' : scn.rollResult.outcome === 'partial' ? '#facc15' : '#ef4444'} />
+                        <span style={{ fontWeight: 'bold' }}>2d6判定: {scn.rollResult.total}</span>
+                        <span style={{ color: scn.rollResult.outcome === 'success' ? '#4ade80' : scn.rollResult.outcome === 'partial' ? '#facc15' : '#ef4444' }}>
+                          ({scn.rollResult.outcome === 'success' ? '成功' : scn.rollResult.outcome === 'partial' ? '部分成功' : '失敗'})
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -819,10 +992,7 @@ ${itemsText}
                   </div>
                 </div>
               ) : (
-                <div 
-                  dangerouslySetInnerHTML={{ __html: scn.content }} 
-                  style={{ lineHeight: 1.6, whiteSpace: 'pre-wrap', outline: 'none' }} 
-                />
+                <MemoizedSceneContent content={scn.content} />
               )}
             </div>
           </div>
@@ -831,12 +1001,24 @@ ${itemsText}
         {pendingPlayerAction && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', position: 'relative' }}>
             <div style={{ alignSelf: 'flex-end', background: 'rgba(59, 130, 246, 0.2)', border: '1px solid rgba(59, 130, 246, 0.3)', padding: '12px 16px', borderRadius: '16px 16px 0 16px', maxWidth: '80%', position: 'relative' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                <div style={{ fontSize: '0.8rem', color: '#60a5fa' }}>あなた (行動)</div>
-              </div>
-              <div style={{ whiteSpace: 'pre-wrap', outline: 'none' }}>
-                {pendingPlayerAction}
-              </div>
+              <details open>
+                <summary style={{ fontSize: '0.8rem', color: '#60a5fa', cursor: 'pointer', outline: 'none', userSelect: 'none' }}>あなた (行動)</summary>
+                <div style={{ whiteSpace: 'pre-wrap', outline: 'none', marginTop: '8px' }}>
+                  {pendingPlayerAction.text}
+                  {pendingPlayerAction.rollResult && (
+                    <div style={{ 
+                      marginTop: '8px', padding: '6px 12px', background: 'rgba(0,0,0,0.3)', borderRadius: '8px',
+                      display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem'
+                    }}>
+                      <Dices size={16} color={pendingPlayerAction.rollResult.outcome === 'success' ? '#4ade80' : pendingPlayerAction.rollResult.outcome === 'partial' ? '#facc15' : '#ef4444'} />
+                      <span style={{ fontWeight: 'bold' }}>2d6判定: {pendingPlayerAction.rollResult.total}</span>
+                      <span style={{ color: pendingPlayerAction.rollResult.outcome === 'success' ? '#4ade80' : pendingPlayerAction.rollResult.outcome === 'partial' ? '#facc15' : '#ef4444' }}>
+                        ({pendingPlayerAction.rollResult.outcome === 'success' ? '成功' : pendingPlayerAction.rollResult.outcome === 'partial' ? '部分成功' : '失敗'})
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </details>
             </div>
           </div>
         )}
@@ -855,7 +1037,29 @@ ${itemsText}
                 fontFamily: '"Courier New", Courier, monospace',
                 fontSize: '0.95rem'
               }}>
-                {cleanStreamText(streamText)}
+                {(() => {
+                  const cleanTxt = streamText.replace(/```(?:json)?[\s\S]*|\{"choices"[\s\S]*/, '');
+                  const thinkMatch = cleanTxt.match(/<think>([\s\S]*?)(?:<\/think>|$)/);
+                  if (thinkMatch) {
+                    const thinkContent = thinkMatch[1];
+                    const bodyMatch = cleanTxt.match(/<\/think>([\s\S]*)$/);
+                    const bodyContent = bodyMatch ? bodyMatch[1] : '';
+                    return (
+                      <>
+                        <details>
+                          <summary style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.85rem', cursor: 'pointer', outline: 'none' }}>
+                            🤔 GMが展開を思考中...
+                          </summary>
+                          <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem', paddingLeft: '12px', borderLeft: '2px solid rgba(255,255,255,0.1)', margin: '8px 0' }}>
+                            {thinkContent}
+                          </div>
+                        </details>
+                        {bodyContent && <span>{cleanStreamText(bodyContent)}</span>}
+                      </>
+                    );
+                  }
+                  return cleanStreamText(cleanTxt);
+                })()}
                 <span className="blink-cursor" style={{ marginLeft: '4px' }}>_</span>
               </div>
             ) : (
@@ -863,8 +1067,135 @@ ${itemsText}
             )}
           </div>
         )}
+
+        {/* 選択肢チップの自動表示 */}
+        {autoChoices.length > 0 && !isGenerating && (
+          <div style={{ padding: '8px 24px 24px', display: 'flex', flexDirection: 'column', gap: '16px', zIndex: 10 }}>
+            <div style={{ fontSize: '0.95rem', color: 'var(--primary, #a78bfa)', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Lightbulb size={18} /> 次の行動を選ぶ
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              {autoChoices.map((choice, idx) => {
+                const deckCards = scenario.wizardData?.party || [];
+                const modifier = calcModifier(choice, deckCards);
+                return (
+                  <button 
+                    key={idx} 
+                    type="button"
+                    style={{ 
+                      padding: '20px', textAlign: 'left', cursor: 'pointer', transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)', 
+                      display: 'flex', flexDirection: 'column', gap: '12px',
+                      background: 'rgba(30, 41, 59, 0.7)',
+                      borderRadius: '16px',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
+                      backdropFilter: 'blur(10px)'
+                    }}
+                    onClick={() => handleChoiceSelect(choice)}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.border = '1px solid var(--primary, #a78bfa)';
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.boxShadow = '0 8px 16px rgba(0,0,0,0.4)';
+                      e.currentTarget.style.background = 'rgba(40, 53, 75, 0.9)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.border = '1px solid rgba(255,255,255,0.1)';
+                      e.currentTarget.style.transform = 'none';
+                      e.currentTarget.style.boxShadow = '0 4px 6px rgba(0,0,0,0.3)';
+                      e.currentTarget.style.background = 'rgba(30, 41, 59, 0.7)';
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#f8fafc', lineHeight: '1.4' }}>{choice.text}</div>
+                      {choice.risky && (
+                        <div style={{ background: 'rgba(250, 204, 21, 0.15)', padding: '6px', borderRadius: '50%', color: '#facc15', display: 'flex', flexShrink: 0 }} title="2d6判定あり">
+                          <Dices size={20} />
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: 'auto', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '0.8rem', padding: '4px 10px', background: 'rgba(255,255,255,0.1)', color: '#cbd5e1', borderRadius: '12px', fontWeight: '500' }}>
+                        {choice.approach}
+                      </span>
+                      {choice.risky && modifier.value > 0 && (
+                        <span style={{ fontSize: '0.8rem', padding: '4px 10px', background: 'rgba(167, 139, 250, 0.2)', color: '#c4b5fd', borderRadius: '12px', fontWeight: 'bold' }} title={modifier.reason}>
+                          +{modifier.value} ({modifier.reason.split(':')[0].replace('+', '')}の適性)
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', margin: '8px 0' }}>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+              <div style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.4)' }}>または自由に選択</div>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+            </div>
+          </div>
+        )}
         <div ref={historyEndRef} />
       </div>
+
+      {freeRolls.length > 0 && (
+        <div className="glass-panel" style={{
+          position: 'absolute',
+          bottom: '120px',
+          right: '24px',
+          padding: '12px',
+          width: '220px',
+          maxHeight: '300px',
+          overflowY: 'auto',
+          zIndex: 40,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          border: '1px solid rgba(167, 139, 250, 0.4)',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
+        }}>
+          <div style={{ fontSize: '0.8rem', color: '#a78bfa', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Dices size={14}/> ダイスメモ</div>
+            <button onClick={() => setFreeRolls([])} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px' }}><X size={14}/></button>
+          </div>
+          {freeRolls.map(r => (
+            <div key={r.id} style={{ fontSize: '0.85rem', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '4px' }}>
+              <span style={{ color: 'rgba(255,255,255,0.5)' }}>{r.time}</span>
+              <span style={{ fontWeight: 'bold', color: r.outcome === '成功' ? '#4ade80' : r.outcome === '部分成功' ? '#facc15' : '#ef4444' }}>
+                {r.total} ({r.outcome})
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Dice Roll Modal */}
+      {pendingDiceRoll && (
+        <DiceRoll 
+          result={pendingDiceRoll.result} 
+          onComplete={() => {
+            if (pendingDiceRoll.isFreeRoll) {
+              const { result } = pendingDiceRoll;
+              const outcomeText = result.outcome === 'success' ? '成功' : result.outcome === 'partial' ? '部分成功' : '失敗';
+              const newRoll = {
+                id: Date.now().toString(),
+                total: result.total,
+                outcome: outcomeText,
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+              };
+              setFreeRolls(prev => [newRoll, ...prev].slice(0, 20));
+            } else if (pendingDiceRoll.choice) {
+              const { choice, result } = pendingDiceRoll;
+              handleNextScene(choice.text, false, { ...scenario, rollResult: result });
+            } else {
+              const { result } = pendingDiceRoll;
+              const outcomeText = result.outcome === 'success' ? '成功' : result.outcome === 'partial' ? '部分成功' : '失敗';
+              setPlayerInput(prev => prev + (prev.trim() ? ' ' : '') + `(2d6判定 ${result.total} -> ${outcomeText})`);
+            }
+            setPendingDiceRoll(null);
+          }}
+        />
+      )}
 
       {/* エンディングモーダル風のオーバーレイ表示 */}
       {showEndingType && (
@@ -957,51 +1288,75 @@ ${itemsText}
           </button>
         </div>
 
-        {/* 選択肢チップの表示 */}
+        {/* 選択肢チップの生成中表示 */}
         {isGeneratingChoices && (
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
             <div className="chip animate-pulse" style={{ background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.5)', border: '1px solid transparent' }}>選択肢を生成中...</div>
             <div className="chip animate-pulse" style={{ background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.5)', border: '1px solid transparent' }}>...</div>
           </div>
         )}
-        {!isGeneratingChoices && suggestedChoices.length > 0 && (
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', animation: 'fadeIn 0.3s ease' }}>
-            {suggestedChoices.map((choice, idx) => (
-              <button 
-                key={idx} 
-                className="chip" 
-                style={{ cursor: 'pointer', background: 'rgba(59, 130, 246, 0.2)', border: '1px solid rgba(59, 130, 246, 0.4)', transition: 'all 0.2s', textAlign: 'left' }}
-                onClick={() => setPlayerInput(choice)}
-              >
-                {choice}
-              </button>
-            ))}
+
+
+        {autoChoices.length === 0 && !isGenerating && sceneHistory.length > 0 && (
+          <div style={{ padding: '8px 0', textAlign: 'center' }}>
+            <span style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.5)' }}>行動を選択してください。右上の「行動の候補を考える」ボタンを押すとAIが提案します。</span>
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
-          <textarea
-            className="btn-glass"
-            style={{ flex: 1, minHeight: '80px', padding: '12px', textAlign: 'left', cursor: 'text', resize: 'vertical' }}
-            placeholder="どう行動しますか？"
-            value={playerInput}
-            onChange={e => setPlayerInput(e.target.value)}
-            disabled={isGenerating}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                handleNextScene();
-              }
-            }}
-          />
-          <button 
-            className="btn btn-primary" 
-            style={{ height: '48px', padding: '0 24px' }}
-            onClick={() => handleNextScene()}
-            disabled={isGenerating || !playerInput.trim()}
-          >
-            <Send size={18} style={{ marginRight: '8px' }}/> 行動する
-          </button>
-        </div>
+        <details 
+          open={showFreeInput} 
+          onToggle={(e) => {
+            const isOpen = (e.target as HTMLDetailsElement).open;
+            setShowFreeInput(isOpen);
+            localStorage.setItem('oneandonly_show_free_input', isOpen ? 'true' : 'false');
+          }}
+          style={{ width: '100%' }}
+        >
+          <summary style={{ cursor: 'pointer', color: '#a78bfa', fontSize: '0.9rem', outline: 'none', userSelect: 'none', padding: '8px 0', display: 'inline-block' }}>
+            自由に行動を入力する
+          </summary>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', marginTop: '8px' }}>
+            <textarea
+              className="btn-glass"
+              style={{ flex: 1, minHeight: '80px', padding: '12px', textAlign: 'left', cursor: 'text', resize: 'vertical', color: '#e2e8f0' }}
+              placeholder="どう行動しますか？"
+              value={playerInput}
+              onChange={e => setPlayerInput(e.target.value)}
+              disabled={isGenerating}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  handleNextScene();
+                }
+              }}
+            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <button 
+                className="btn btn-glass"
+                style={{ height: '32px', padding: '0 16px', fontSize: '0.8rem', color: '#facc15', borderColor: 'rgba(250, 204, 21, 0.3)' }}
+                onClick={() => {
+                  const deckCards = scenario.wizardData?.party || [];
+                  const dummyChoice = { text: playerInput || '手動判定', risky: true, approach: '直感' };
+                  const { value } = calcModifier(dummyChoice, deckCards);
+                  const result = rollCheck(value);
+                  setPendingDiceRoll({ result });
+                }}
+                title="ダイスを振って結果を入力欄に追加する"
+                disabled={isGenerating}
+              >
+                <Dices size={14} style={{ marginRight: '4px' }}/> 判定ダイス
+              </button>
+              <button 
+                className="btn btn-primary" 
+                style={{ height: '48px', padding: '0 24px' }}
+                onClick={() => handleNextScene()}
+                disabled={isGenerating || !playerInput.trim()}
+              >
+                <Send size={18} style={{ marginRight: '8px' }}/> 行動する
+              </button>
+            </div>
+          </div>
+        </details>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
           <button 
             className="btn btn-glass" 
