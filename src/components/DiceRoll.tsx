@@ -45,11 +45,6 @@ export default function DiceRoll({ result, onComplete }: DiceRollProps) {
         setD2(result.dice[1]);
         setRotation1(0);
         setRotation2(0);
-        
-        // 結果表示から 1.5 秒後に自動で閉じる
-        setTimeout(() => {
-          onComplete();
-        }, 1500);
       }, 800);
     }
 
@@ -57,7 +52,14 @@ export default function DiceRoll({ result, onComplete }: DiceRollProps) {
       clearInterval(rollInterval);
       clearTimeout(timeout);
     };
-  }, [isRolling, result, onComplete]);
+  }, [isRolling, result]);
+
+  useEffect(() => {
+    if (!isRolling) {
+      const t = window.setTimeout(onComplete, 1500);
+      return () => window.clearTimeout(t);
+    }
+  }, [isRolling, onComplete]);
 
   let outcomeText = '';
   let outcomeColor = '';

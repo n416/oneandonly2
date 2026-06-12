@@ -220,13 +220,14 @@ export default function ScenarioPlay() {
 - メタ的な発言(GMとしての説明など)はしない。
 - 最後の文節はプレイヤーに次の行動を促す問いかけで終わること。
 - **必ず文章の一番最後に、以下の形式でマークダウンのJSONコードブロック（${"```"}json）を出力し、選択肢を4つ提供してください。**
+- approachは必ず「力技」「技巧」「知恵」「話術」「直感」のいずれか1つとすること。
 ${"```"}json
 {
   "choices": [
     {"text": "選択肢1のテキスト", "approach": "力技", "risky": true},
     {"text": "選択肢2のテキスト", "approach": "知恵", "risky": false},
     {"text": "選択肢3のテキスト", "approach": "直感", "risky": false},
-    {"text": "選択肢4のテキスト", "approach": "魅力", "risky": true}
+    {"text": "選択肢4のテキスト", "approach": "話術", "risky": true}
   ]
 }
 ${"```"}
@@ -378,7 +379,8 @@ ${"```"}
       setSceneHistory(prev => [...prev, newEntry]);
 
       // シナリオの更新日時を更新
-      const updatedScenario = { ...targetScenario, updatedAt: new Date().toISOString() };
+      const { rollResult: _omit, ...cleanScenario } = targetScenario;
+      const updatedScenario = { ...cleanScenario, updatedAt: new Date().toISOString() };
       await updateScenario(updatedScenario);
       setScenario(updatedScenario);
 
@@ -765,6 +767,7 @@ ${itemsText}
 - 多様性を意識し、探索、対話、戦闘準備、回避、あるいは少し意外な行動など、異なる方向性の選択肢を含めてください。
 - もし「持ち物」がある場合、そのアイテムを活用した選択肢を少なくとも1つ含めてください。
 - **必ず以下の形式で、マークダウンのJSONコードブロック（${"```"}json）として選択肢のみを出力してください。本文や説明は一切不要です。**
+- approachは必ず「力技」「技巧」「知恵」「話術」「直感」のいずれか1つとすること。
 
 ${"```"}json
 {
@@ -772,7 +775,7 @@ ${"```"}json
     {"text": "選択肢1のテキスト", "approach": "力技", "risky": true},
     {"text": "選択肢2のテキスト", "approach": "知恵", "risky": false},
     {"text": "選択肢3のテキスト", "approach": "直感", "risky": false},
-    {"text": "選択肢4のテキスト", "approach": "魅力", "risky": true}
+    {"text": "選択肢4のテキスト", "approach": "話術", "risky": true}
   ]
 }
 ${"```"}
@@ -1038,7 +1041,7 @@ ${"```"}
                 fontSize: '0.95rem'
               }}>
                 {(() => {
-                  const cleanTxt = streamText.replace(/```(?:json)?[\s\S]*|\{"choices"[\s\S]*/, '');
+                  const cleanTxt = streamText.replace(/```(?:json)?[\s\S]*|\{\s*"choices"[\s\S]*/, '');
                   const thinkMatch = cleanTxt.match(/<think>([\s\S]*?)(?:<\/think>|$)/);
                   if (thinkMatch) {
                     const thinkContent = thinkMatch[1];
